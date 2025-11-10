@@ -1,0 +1,19 @@
+[package]
+name = "comp-gate"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+thiserror = "2.0.17"
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Devices_DeviceAndDriverInstallation",  # Device enumeration & info
+    "Win32_Devices_Properties",                    # Device properties
+    "Win32_System_Registry",                       # Registry access for device info
+    "Win32_Storage_FileSystem",                    # Device handles
+    "Win32_System_IO",                             # I/O operations
+    "Win32_System_SystemServices",                 # System services
+    "Win32_Devices_Usb",                          # USB-specific info (optional)
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_LibraryLoader",
+] }

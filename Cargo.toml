@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.100"
 thiserror = "2.0.17"
-windows = { version = "0.62.2", features = [
+windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Devices_DeviceAndDriverInstallation",  # Device enumeration & info
     "Win32_Devices_Properties",                    # Device properties

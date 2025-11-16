@@ -84,6 +84,7 @@ impl DeviceTracker {
         loop {
             unsafe {
                 let mut device_data: SP_DEVINFO_DATA = std::mem::zeroed();
+                device_data.cbSize = std::mem::size_of::<SP_DEVINFO_DATA>() as u32;
                 let operation_result = SetupDiEnumDeviceInfo(
                     devinfoset,
                     index,

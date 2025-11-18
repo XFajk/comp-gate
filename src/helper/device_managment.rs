@@ -245,6 +245,7 @@ impl DeviceTracker {
 
         loop {
             unsafe {
+                println!("Attempting to enumerate device at index: {}", index);
                 let mut device_data: SP_DEVINFO_DATA = std::mem::zeroed();
                 device_data.cbSize = std::mem::size_of::<SP_DEVINFO_DATA>() as u32;
                 let operation_result = SetupDiEnumDeviceInfo(
@@ -254,10 +255,11 @@ impl DeviceTracker {
                 ) == TRUE;
 
                 if operation_result {
-                    println!("- Device found at index: {}", index);
                     devices.push(Device::from_bare_devinfo(device_data, devinfoset)?);
+                    println!("\t- Device found at index: {}", index);
                     index += 1;
                 } else {
+                    println!("\t- No device found at index: {}", index);
                     let error = GetLastError();
                     if error == ERROR_NO_MORE_ITEMS {
                         break;

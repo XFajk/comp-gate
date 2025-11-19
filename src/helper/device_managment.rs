@@ -78,15 +78,43 @@ impl Device {
     ) -> Result<Self, Win32Error> {
         let device_id = Self::retrive_device_id(devinfo, devinfoset)?;
 
-        let device_type =
-            unsafe { Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_DevType)? };
+        let device_type = match unsafe {
+            Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_DevType)
+        } {
+            Ok(prop) => prop,
+            Err(e) => {
+                println!(
+                    "Warning: Could not retrieve Device Type for Device ID {} because of an error: {:?}",
+                    device_id, e
+                );
+                Rc::from("<Unknown Device Type>")
+            }
+        };
 
         let device_description = unsafe {
-            Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_DeviceDesc)?
+            match Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_DeviceDesc) {
+                Ok(prop) => prop,
+                Err(e) => {
+                    println!(
+                        "Warning: Could not retrieve Device Description for Device ID {} because of an error: {:?}",
+                        device_id, e
+                    );
+                    Rc::from("<Unknown Device Description>")
+                }
+            }
         };
 
         let device_friendly_name = unsafe {
-            Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_FriendlyName)?
+            match Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_FriendlyName) {
+                Ok(prop) => prop,
+                Err(e) => { 
+                    println!(
+                        "Warning: Could not retrieve Device Friendly Name for Device ID {} because of an error: {:?}",
+                        device_id, e
+                    );
+                    Rc::from("<Unknown Device Friendly Name>")
+                }
+            }
         };
 
         Ok(Device {

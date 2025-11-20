@@ -358,7 +358,7 @@ impl DeviceTracker {
 
 fn device_filter_function(device: &Device) -> bool {
     if let Some(service) = &device.device_service {
-        service.as_ref() == "usbccgp" || service.as_ref() == "usbhub"
+        service.as_ref() == "usbhub3" || service.as_ref() == "usbhub"
     } else {
         false
     }

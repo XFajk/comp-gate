@@ -2,9 +2,7 @@ use crate::error::Win32Error;
 /// This file holds the functions related to device management
 /// such as listing connected devices, ejecting devices, etc.
 use std::{
-    panic,
-    ptr::{null, null_mut},
-    rc::Rc,
+    ops::Deref, panic, ptr::{null, null_mut}, rc::Rc
 };
 use windows_sys::Win32::{
     Devices::{
@@ -105,7 +103,7 @@ impl Device {
         let device_service = match unsafe {
             Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_Service)
         } {
-            Ok(prop) => Some(prop),
+            Ok(prop) => Some(prop.to_lowercase().into()),
             Err(e) => {
                 println!(
                     "Warning: Could not retrieve Device Service for Device ID {} because of an error: {:?}",
@@ -336,10 +334,8 @@ impl DeviceTracker {
                 ) == TRUE;
 
                 if operation_result {
-                    let next_device = Device::from_bare_devinfo(device_data, devinfoset)?;
+                    let next_device = Device::from_bare_devinfo(device_data, devinfoset)?; 
 
-                    // TODO: filter out system devices what that means is we only want the real device like keyboard cameras etc.
-                    // so filter out hubs and other reduntend devices.
                     devices.push(next_device);
                     println!("\t- Device found at index: {}", index);
                     index += 1;
@@ -356,5 +352,14 @@ impl DeviceTracker {
         }
         println!("Total devices found: {}", devices.len());
         Ok(devices)
+    }
+}
+
+
+fn device_filter_function(device: &Device) -> bool {
+    if let Some(service) = &device.device_service {
+        service.as_ref() == "usbccgp" || service.as_ref() == "usbhub"
+    } else {
+        false
     }
 }

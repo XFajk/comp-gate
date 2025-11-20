@@ -93,7 +93,7 @@ impl std::fmt::Display for Device {
             f,
             " - Device Description: {}",
             self.device_description.as_deref().unwrap_or("None")
-        )?;
+        ) 
     }
 }
 

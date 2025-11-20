@@ -335,8 +335,10 @@ impl DeviceTracker {
 
                 if operation_result {
                     let next_device = Device::from_bare_devinfo(device_data, devinfoset)?; 
-
-                    devices.push(next_device);
+                    
+                    if !device_filter_function(&next_device) {
+                        devices.push(next_device);
+                    }
                     println!("\t- Device found at index: {}", index);
                     index += 1;
                 } else {

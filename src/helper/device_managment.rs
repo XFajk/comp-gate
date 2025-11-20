@@ -10,9 +10,7 @@ use windows_sys::Win32::{
     Devices::{
         DeviceAndDriverInstallation::*,
         Properties::{
-            DEVPKEY_Device_DevType, DEVPKEY_Device_DeviceDesc, DEVPKEY_Device_FriendlyName,
-            DEVPKEY_Device_Service, DEVPROP_MASK_TYPE, DEVPROP_TYPE_EMPTY, DEVPROP_TYPE_STRING,
-            DEVPROPTYPE,
+            DEVPKEY_Device_Class, DEVPKEY_Device_DevType, DEVPKEY_Device_DeviceDesc, DEVPKEY_Device_FriendlyName, DEVPKEY_Device_Service, DEVPROP_MASK_TYPE, DEVPROP_TYPE_EMPTY, DEVPROP_TYPE_STRING, DEVPROPTYPE
         },
     },
     Foundation::*,
@@ -118,7 +116,7 @@ impl Device {
         };
 
         let device_class = match unsafe {
-            Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_Service)
+            Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_Class)
         } {
             Ok(prop) => Some(prop),
             Err(e) => {
@@ -342,7 +340,7 @@ impl DeviceTracker {
 
                     // TODO: filter out system devices what that means is we only want the real device like keyboard cameras etc.
                     // so filter out hubs and other reduntend devices.
-
+                    devices.push(next_device);
                     println!("\t- Device found at index: {}", index);
                     index += 1;
                 } else {

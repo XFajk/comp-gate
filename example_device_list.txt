@@ -1,0 +1,104 @@
+Device Instance ID: Device ID: USB\VID_048D&PID_5702\6&28CF390B&0&14
+ - Device Friendly Name: <Unknown Device Friendly Name>
+ - Device Type: <Unknown Device Type>
+ - Device Description: USB Input Device
+
+Device Instance ID: Device ID: USB\VID_1A2C&PID_0E24&MI_01\7&E7CD736&0&0001
+ - Device Friendly Name: <Unknown Device Friendly Name>
+ - Device Type: <Unknown Device Type>
+ - Device Description: USB Input Device
+
+Device Instance ID: Device ID: USB\VID_1A2C&PID_0E24&MI_00\7&E7CD736&0&0000
+ - Device Friendly Name: <Unknown Device Friendly Name>
+ - Device Type: <Unknown Device Type>
+ - Device Description: USB Input Device
+
+Device Instance ID: Device ID: USB\VID_046D&PID_C53F&MI_00\7&2EDA5641&0&0000
+ - Device Friendly Name: <Unknown Device Friendly Name>
+ - Device Type: <Unknown Device Type>
+ - Device Description: USB Input Device
+
+Device Instance ID: Device ID: USB\VID_046D&PID_C53F&MI_01\7&2EDA5641&0&0001
+ - Device Friendly Name: <Unknown Device Friendly Name>
+ - Device Type: <Unknown Device Type>
+ - Device Description: USB Input Device
+
+Device Instance ID: Device ID: USB\VID_046D&PID_C53F&MI_02\7&2EDA5641&0&0002
+ - Device Friendly Name: <Unknown Device Friendly Name>
+ - Device Type: <Unknown Device Type>
+ - Device Description: USB Input Device
+
+Device Instance ID: Device ID: USB\VID_046D&PID_C53F&LAMPARRAY\7&2EDA5641&0&12_SLOT00
+ - Device Friendly Name: <Unknown Device Friendly Name>
+ - Device Type: <Unknown Device Type>
+ - Device Description: LIGHTSPEED Receiver
+
+Device Instance ID: Device ID: USB\VID_046D&PID_C53F&LAMPARRAY\7&2EDA5641&0&12_SLOT01
+ - Device Friendly Name: <Unknown Device Friendly Name>
+ - Device Type: <Unknown Device Type>
+ - Device Description: LIGHTSPEED Receiver
+
+Device Instance ID: Device ID: USB\VID_046D&PID_C53F&LAMPARRAY\7&2EDA5641&0&12_SLOT02
+ - Device Friendly Name: <Unknown Device Friendly Name>
+ - Device Type: <Unknown Device Type>
+ - Device Description: LIGHTSPEED Receiver
+
+Device Instance ID: Device ID: USB\VID_046D&PID_C53F&LAMPARRAY\7&2EDA5641&0&12_SLOT03
+ - Device Friendly Name: <Unknown Device Friendly Name>
+ - Device Type: <Unknown Device Type>
+ - Device Description: LIGHTSPEED Receiver
+
+Device Instance ID: Device ID: USB\VID_046D&PID_C53F&LAMPARRAY\7&2EDA5641&0&12_SLOT04
+ - Device Friendly Name: <Unknown Device Friendly Name>
+ - Device Type: <Unknown Device Type>
+ - Device Description: LIGHTSPEED Receiver
+
+Device Instance ID: Device ID: USB\VID_046D&PID_C53F&LAMPARRAY\7&2EDA5641&0&12_SLOT05
+ - Device Friendly Name: <Unknown Device Friendly Name>
+ - Device Type: <Unknown Device Type>
+ - Device Description: LIGHTSPEED Receiver
+
+Device Instance ID: Device ID: USB\VID_046D&PID_C53F&LAMPARRAY\7&2EDA5641&0&12_SLOT06
+ - Device Friendly Name: <Unknown Device Friendly Name>
+ - Device Type: <Unknown Device Type>
+ - Device Description: LIGHTSPEED Receiver
+
+Device Instance ID: Device ID: USB\VID_1A2C&PID_0E24\6&2838F1DC&0&3
+ - Device Friendly Name: <Unknown Device Friendly Name>
+ - Device Type: <Unknown Device Type>
+ - Device Description: USB Composite Device
+
+Device Instance ID: Device ID: USB\VID_145F&PID_0254&MI_02\7&11E52DF&0&0002
+ - Device Friendly Name: <Unknown Device Friendly Name>
+ - Device Type: <Unknown Device Type>
+ - Device Description: USB Input Device
+
+Device Instance ID: Device ID: USB\VID_145F&PID_0254&MI_00\7&11E52DF&0&0000
+ - Device Friendly Name: Trust GXT 232 Microphone
+ - Device Type: <Unknown Device Type>
+ - Device Description: USB Audio Device
+
+Device Instance ID: Device ID: USB\VID_046D&PID_C53F\6&28CF390B&0&12
+ - Device Friendly Name: LIGHTSPEED Receiver
+ - Device Type: <Unknown Device Type>
+ - Device Description: LIGHTSPEED Receiver
+
+Device Instance ID: Device ID: USB\VID_0BDA&PID_8813\123456
+ - Device Friendly Name: Realtek 8814AU Wireless LAN 802.11ac USB NIC
+ - Device Type: <Unknown Device Type>
+ - Device Description: Realtek 8814AU Wireless LAN 802.11ac USB NIC
+
+Device Instance ID: Device ID: USB\ROOT_HUB30\5&23F8E3F5&0&0
+ - Device Friendly Name: <Unknown Device Friendly Name>
+ - Device Type: <Unknown Device Type>
+ - Device Description: USB Root Hub (USB 3.0)
+
+Device Instance ID: Device ID: USB\VID_145F&PID_0254\6&2838F1DC&0&1
+ - Device Friendly Name: <Unknown Device Friendly Name>
+ - Device Type: <Unknown Device Type>
+ - Device Description: USB Composite Device
+
+Device Instance ID: Device ID: USB\ROOT_HUB30\5&201A262C&0&0
+ - Device Friendly Name: <Unknown Device Friendly Name>
+ - Device Type: <Unknown Device Type>
+ - Device Description: USB Root Hub (USB 3.0)

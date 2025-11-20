@@ -11,7 +11,8 @@ use windows_sys::Win32::{
         DeviceAndDriverInstallation::*,
         Properties::{
             DEVPKEY_Device_DevType, DEVPKEY_Device_DeviceDesc, DEVPKEY_Device_FriendlyName,
-            DEVPROP_MASK_TYPE, DEVPROP_TYPE_EMPTY, DEVPROP_TYPE_STRING, DEVPROPTYPE,
+            DEVPKEY_Device_Service, DEVPROP_MASK_TYPE, DEVPROP_TYPE_EMPTY, DEVPROP_TYPE_STRING,
+            DEVPROPTYPE,
         },
     },
     Foundation::*,
@@ -56,18 +57,43 @@ impl TryFrom<(&[u8], DEVPROPTYPE)> for DeviceProperty {
 pub struct Device {
     devinfo: SP_DEVINFO_DATA,
     pub device_id: Rc<str>,
-    pub device_friendly_name: Rc<str>,
-    pub device_type: Rc<str>,
-    pub device_description: Rc<str>,
+    pub sub_interface_devices: Vec<Box<Device>>,
+
+    pub device_service: Option<Rc<str>>,
+    pub device_class: Option<Rc<str>>,
+    pub device_friendly_name: Option<Rc<str>>,
+    pub device_type: Option<Rc<str>>,
+    pub device_description: Option<Rc<str>>,
 }
 
 impl std::fmt::Display for Device {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
+        writeln!(f, "Device ID: {}", self.device_id)?;
+        writeln!(
             f,
-            "Device ID: {}\n - Device Friendly Name: {}\n - Device Type: {}\n - Device Description: {}\n",
-            self.device_id, self.device_friendly_name, self.device_type, self.device_description
-        )
+            " - Device Service: {}",
+            self.device_service.as_deref().unwrap_or("None")
+        )?;
+        writeln!(
+            f,
+            " - Device Class: {}",
+            self.device_class.as_deref().unwrap_or("None")
+        )?;  
+        writeln!(
+            f,
+            " - Device Friendly Name: {}",
+            self.device_friendly_name.as_deref().unwrap_or("None")
+        )?;
+        writeln!(
+            f,
+            " - Device Type: {}",
+            self.device_type.as_deref().unwrap_or("None")
+        )?;
+        writeln!(
+            f,
+            " - Device Description: {}",
+            self.device_description.as_deref().unwrap_or("None")
+        )?;
     }
 }
 
@@ -78,41 +104,67 @@ impl Device {
     ) -> Result<Self, Win32Error> {
         let device_id = Self::retrive_device_id(devinfo, devinfoset)?;
 
+        let device_service = match unsafe {
+            Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_Service)
+        } {
+            Ok(prop) => Some(prop),
+            Err(e) => {
+                println!(
+                    "Warning: Could not retrieve Device Service for Device ID {} because of an error: {:?}",
+                    device_id, e
+                );
+                None
+            }
+        };
+
+        let device_class = match unsafe {
+            Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_Service)
+        } {
+            Ok(prop) => Some(prop),
+            Err(e) => {
+                println!(
+                    "Warning: Could not retrieve Device Class for Device ID {} because of an error: {:?}",
+                    device_id, e
+                );
+                None
+            }
+        };
+
         let device_type = match unsafe {
             Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_DevType)
         } {
-            Ok(prop) => prop,
+            Ok(prop) => Some(prop),
             Err(e) => {
                 println!(
                     "Warning: Could not retrieve Device Type for Device ID {} because of an error: {:?}",
                     device_id, e
                 );
-                Rc::from("<Unknown Device Type>")
+                None
             }
         };
 
         let device_description = unsafe {
             match Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_DeviceDesc) {
-                Ok(prop) => prop,
+                Ok(prop) => Some(prop),
                 Err(e) => {
                     println!(
                         "Warning: Could not retrieve Device Description for Device ID {} because of an error: {:?}",
                         device_id, e
                     );
-                    Rc::from("<Unknown Device Description>")
+                    None
                 }
             }
         };
 
         let device_friendly_name = unsafe {
             match Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_FriendlyName) {
-                Ok(prop) => prop,
-                Err(e) => { 
+                Ok(prop) => Some(prop),
+                Err(e) => {
                     println!(
                         "Warning: Could not retrieve Device Friendly Name for Device ID {} because of an error: {:?}",
                         device_id, e
                     );
-                    Rc::from("<Unknown Device Friendly Name>")
+                    None
                 }
             }
         };
@@ -120,9 +172,12 @@ impl Device {
         Ok(Device {
             devinfo,
             device_id,
+            sub_interface_devices: vec![],
+            device_service,
+            device_class,
+            device_friendly_name,
             device_type,
             device_description,
-            device_friendly_name,
         })
     }
 
@@ -283,7 +338,11 @@ impl DeviceTracker {
                 ) == TRUE;
 
                 if operation_result {
-                    devices.push(Device::from_bare_devinfo(device_data, devinfoset)?);
+                    let next_device = Device::from_bare_devinfo(device_data, devinfoset)?;
+
+                    // TODO: filter out system devices what that means is we only want the real device like keyboard cameras etc.
+                    // so filter out hubs and other reduntend devices.
+
                     println!("\t- Device found at index: {}", index);
                     index += 1;
                 } else {

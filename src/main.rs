@@ -12,8 +12,8 @@ use anyhow::Result;
 
 fn main() -> Result<()> {
     let device_tracker = DeviceTracker::load()?;
-    for device in device_tracker.devices.iter() {
-        println!("Device Instance ID: {}", device);
+    for (_, device) in device_tracker.devices.iter() {
+        println!("{}", device);
     }
     Ok(())
 }

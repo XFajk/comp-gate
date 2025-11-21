@@ -2,13 +2,18 @@ use crate::error::Win32Error;
 /// This file holds the functions related to device management
 /// such as listing connected devices, ejecting devices, etc.
 use std::{
-    ops::Deref, panic, ptr::{null, null_mut}, rc::Rc
+    collections::HashMap,
+    panic,
+    ptr::{null, null_mut},
+    rc::Rc,
 };
 use windows_sys::Win32::{
     Devices::{
         DeviceAndDriverInstallation::*,
         Properties::{
-            DEVPKEY_Device_Class, DEVPKEY_Device_DevType, DEVPKEY_Device_DeviceDesc, DEVPKEY_Device_FriendlyName, DEVPKEY_Device_Service, DEVPROP_MASK_TYPE, DEVPROP_TYPE_EMPTY, DEVPROP_TYPE_STRING, DEVPROPTYPE
+            DEVPKEY_Device_Class, DEVPKEY_Device_DevType, DEVPKEY_Device_DeviceDesc,
+            DEVPKEY_Device_FriendlyName, DEVPKEY_Device_Parent, DEVPKEY_Device_Service,
+            DEVPROP_MASK_TYPE, DEVPROP_TYPE_EMPTY, DEVPROP_TYPE_STRING, DEVPROPTYPE,
         },
     },
     Foundation::*,
@@ -53,7 +58,8 @@ impl TryFrom<(&[u8], DEVPROPTYPE)> for DeviceProperty {
 pub struct Device {
     devinfo: SP_DEVINFO_DATA,
     pub device_id: Rc<str>,
-    pub sub_interface_devices: Vec<Box<Device>>,
+    pub parent_id: Option<Rc<str>>,
+    pub sub_interface_devices: HashMap<Rc<str>, Device>,
 
     pub device_service: Option<Rc<str>>,
     pub device_class: Option<Rc<str>>,
@@ -74,7 +80,7 @@ impl std::fmt::Display for Device {
             f,
             " - Device Class: {}",
             self.device_class.as_deref().unwrap_or("None")
-        )?;  
+        )?;
         writeln!(
             f,
             " - Device Friendly Name: {}",
@@ -89,7 +95,12 @@ impl std::fmt::Display for Device {
             f,
             " - Device Description: {}",
             self.device_description.as_deref().unwrap_or("None")
-        ) 
+        )?;
+        for (_, sub_device) in self.sub_interface_devices.iter() {
+            writeln!(f, "\tSub-device:")?;
+            writeln!(f, "\t{}", sub_device)?;
+        }
+        Ok(())
     }
 }
 
@@ -99,6 +110,13 @@ impl Device {
         devinfoset: HDEVINFO,
     ) -> Result<Self, Win32Error> {
         let device_id = Self::retrive_device_id(devinfo, devinfoset)?;
+
+        let parent_id = match unsafe {
+            Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_Parent)
+        } {
+            Ok(prop) => Some(prop),
+            Err(_) => None,
+        };
 
         let device_service = match unsafe {
             Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_Service)
@@ -168,7 +186,8 @@ impl Device {
         Ok(Device {
             devinfo,
             device_id,
-            sub_interface_devices: vec![],
+            parent_id,
+            sub_interface_devices: HashMap::new(),
             device_service,
             device_class,
             device_friendly_name,
@@ -283,7 +302,7 @@ impl Device {
 
 pub struct DeviceTracker {
     device_information_set: HDEVINFO,
-    pub devices: Vec<Device>,
+    pub devices: HashMap<Rc<str>, Device>,
 }
 
 impl Drop for DeviceTracker {
@@ -318,8 +337,8 @@ impl DeviceTracker {
         })
     }
 
-    fn get_listed_devices(devinfoset: HDEVINFO) -> Result<Vec<Device>, Win32Error> {
-        let mut devices: Vec<Device> = Vec::new();
+    fn get_listed_devices(devinfoset: HDEVINFO) -> Result<HashMap<Rc<str>, Device>, Win32Error> {
+        let mut devices: HashMap<Rc<str>, Device> = HashMap::new();
         let mut index: u32 = 0;
 
         loop {
@@ -334,10 +353,10 @@ impl DeviceTracker {
                 ) == TRUE;
 
                 if operation_result {
-                    let next_device = Device::from_bare_devinfo(device_data, devinfoset)?; 
-                    
+                    let next_device = Device::from_bare_devinfo(device_data, devinfoset)?;
+
                     if !device_filter_function(&next_device) {
-                        devices.push(next_device);
+                        devices.insert(next_device.device_id.clone(), next_device);
                     }
                     println!("\t- Device found at index: {}", index);
                     index += 1;
@@ -352,11 +371,11 @@ impl DeviceTracker {
                 }
             }
         }
+
         println!("Total devices found: {}", devices.len());
-        Ok(devices)
+        Ok(convert_devices_into_tree(devices))
     }
 }
-
 
 fn device_filter_function(device: &Device) -> bool {
     if let Some(service) = &device.device_service {
@@ -364,4 +383,23 @@ fn device_filter_function(device: &Device) -> bool {
     } else {
         false
     }
+}
+
+fn convert_devices_into_tree(mut devices: HashMap<Rc<str>, Device>) -> HashMap<Rc<str>, Device> {
+    let device_ids: Vec<Rc<str>> = devices.keys().cloned().collect();
+    let parent_ids: Vec<Rc<str>> = devices
+        .values()
+        .filter_map(|d| d.parent_id.clone())
+        .collect();
+
+    for id in parent_ids.iter() {
+        if device_ids.contains(id) {
+            let child_device = devices.remove(id).unwrap();
+            let parent_device = devices.get_mut(id).unwrap();
+
+            parent_device.sub_interface_devices.insert(child_device.device_id.clone(), child_device);
+        }
+    }
+
+    devices
 }

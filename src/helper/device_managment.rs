@@ -387,15 +387,21 @@ fn device_filter_function(device: &Device) -> bool {
 
 fn convert_devices_into_tree(mut devices: HashMap<Rc<str>, Device>) -> HashMap<Rc<str>, Device> {
     let device_ids: Vec<Rc<str>> = devices.keys().cloned().collect();
-    let parent_ids: Vec<Rc<str>> = devices
+    let parent_ids: Vec<(Rc<str>, Rc<str>)> = devices
         .values()
-        .filter_map(|d| d.parent_id.clone())
+        .filter_map(|d|{ 
+            if let Some(pid) = &d.parent_id {
+                Some((pid.clone(), d.device_id.clone()))
+            } else {
+                None
+            }
+        })
         .collect();
 
-    for id in parent_ids.iter() {
-        if device_ids.contains(id) {
-            let child_device = devices.remove(id).unwrap();
-            let parent_device = devices.get_mut(id).unwrap();
+    for (pid, cid) in parent_ids.iter() {
+        if device_ids.contains(pid) {
+            let child_device = devices.remove(cid).unwrap();
+            let parent_device = devices.get_mut(pid).unwrap();
 
             parent_device.sub_interface_devices.insert(child_device.device_id.clone(), child_device);
         }

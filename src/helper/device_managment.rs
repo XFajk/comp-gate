@@ -71,7 +71,7 @@ pub struct Device {
 
 impl std::fmt::Display for Device {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Device ID: {}", self.device_id)?;
+        writeln!(f, "{}Device ID: {}", "\t".repeat(self.tree_level as usize), self.device_id)?;
         writeln!(
             f,
             "{} - Device Service: {}",

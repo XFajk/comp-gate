@@ -59,6 +59,7 @@ pub struct Device {
     devinfo: SP_DEVINFO_DATA,
     pub device_id: Rc<str>,
     pub parent_id: Option<Rc<str>>,
+    pub tree_level: u32,
     pub sub_interface_devices: HashMap<Rc<str>, Device>,
 
     pub device_service: Option<Rc<str>>,
@@ -73,32 +74,46 @@ impl std::fmt::Display for Device {
         writeln!(f, "Device ID: {}", self.device_id)?;
         writeln!(
             f,
-            " - Device Service: {}",
+            "{} - Device Service: {}",
+            "\t".repeat(self.tree_level as usize),
             self.device_service.as_deref().unwrap_or("None")
         )?;
         writeln!(
             f,
-            " - Device Class: {}",
+            "{} - Device Class: {}",
+            "\t".repeat(self.tree_level as usize),
             self.device_class.as_deref().unwrap_or("None")
         )?;
         writeln!(
             f,
-            " - Device Friendly Name: {}",
+            "{} - Device Friendly Name: {}",
+            "\t".repeat(self.tree_level as usize),
             self.device_friendly_name.as_deref().unwrap_or("None")
         )?;
         writeln!(
             f,
-            " - Device Type: {}",
+            "{} - Device Type: {}",
+            "\t".repeat(self.tree_level as usize),
             self.device_type.as_deref().unwrap_or("None")
         )?;
         writeln!(
             f,
-            " - Device Description: {}",
+            "{} - Device Description: {}",
+            "\t".repeat(self.tree_level as usize),
             self.device_description.as_deref().unwrap_or("None")
         )?;
         for (_, sub_device) in self.sub_interface_devices.iter() {
-            writeln!(f, "\tSub-device:")?;
-            writeln!(f, "\t{}", sub_device)?;
+            writeln!(
+                f,
+                "{}Sub-device:",
+                "\t".repeat(self.tree_level as usize + 1)
+            )?;
+            writeln!(
+                f,
+                "{}{}",
+                "\t".repeat(self.tree_level as usize + 1),
+                sub_device
+            )?;
         }
         Ok(())
     }
@@ -114,7 +129,7 @@ impl Device {
         let parent_id = match unsafe {
             Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_Parent)
         } {
-            Ok(prop) => Some(prop),
+            Ok(prop) => Some(prop.to_uppercase().into()),
             Err(_) => None,
         };
 
@@ -187,6 +202,7 @@ impl Device {
             devinfo,
             device_id,
             parent_id,
+            tree_level: 0,
             sub_interface_devices: HashMap::new(),
             device_service,
             device_class,
@@ -233,7 +249,9 @@ impl Device {
             } else {
                 (required_size as usize).saturating_sub(1)
             };
-            let device_instance_id: Rc<str> = String::from_utf16_lossy(&buffer[..len]).into();
+            let device_instance_id: Rc<str> = String::from_utf16_lossy(&buffer[..len])
+                .to_uppercase()
+                .into();
             Ok(device_instance_id)
         }
     }
@@ -389,7 +407,7 @@ fn convert_devices_into_tree(mut devices: HashMap<Rc<str>, Device>) -> HashMap<R
     let device_ids: Vec<Rc<str>> = devices.keys().cloned().collect();
     let parent_ids: Vec<(Rc<str>, Rc<str>)> = devices
         .values()
-        .filter_map(|d|{ 
+        .filter_map(|d| {
             if let Some(pid) = &d.parent_id {
                 Some((pid.clone(), d.device_id.clone()))
             } else {
@@ -399,13 +417,38 @@ fn convert_devices_into_tree(mut devices: HashMap<Rc<str>, Device>) -> HashMap<R
         .collect();
 
     for (pid, cid) in parent_ids.iter() {
-        if device_ids.contains(pid) {
-            let child_device = devices.remove(cid).unwrap();
-            let parent_device = devices.get_mut(pid).unwrap();
-
-            parent_device.sub_interface_devices.insert(child_device.device_id.clone(), child_device);
-        }
+        place_child_in_parent(pid, cid, &mut devices, &device_ids, &parent_ids, 0);
     }
 
     devices
+}
+
+fn place_child_in_parent(
+    parent_id: &Rc<str>,
+    child_id: &Rc<str>,
+    devices: &mut HashMap<Rc<str>, Device>,
+    device_ids: &Vec<Rc<str>>,
+    parent_ids: &Vec<(Rc<str>, Rc<str>)>,
+    level: u32,
+) -> () {
+    if device_ids.contains(parent_id) {
+        // This code here tracks a bug if we have a more nested device tree
+        // what can happen is that a child_device can also be a perent of another device
+        // and since we are moving the child_device from the devices HashMap to the sub_interface_devices
+        // we need to track where when we find the device that has the child_device as parent
+        // we can get this child_device from the parent_device's sub_interface_devices
+        // instead of trying to get it from the devices HashMap which no longer contains it
+        while let Some((pid, cid)) = parent_ids.iter().find(|(p, _)| p == child_id) {
+            place_child_in_parent(pid, cid, devices, device_ids, parent_ids, level + 1);
+        }
+
+        let mut child_device = devices.remove(child_id).unwrap();
+        let parent_device = devices.get_mut(parent_id).unwrap();
+
+        child_device.tree_level = level + 1;
+
+        parent_device
+            .sub_interface_devices
+            .insert(child_device.device_id.clone(), child_device);
+    }
 }

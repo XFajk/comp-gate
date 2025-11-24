@@ -110,8 +110,7 @@ impl std::fmt::Display for Device {
             )?;
             writeln!(
                 f,
-                "{}{}",
-                "\t".repeat(self.tree_level as usize + 1),
+                "{}",
                 sub_device
             )?;
         }

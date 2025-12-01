@@ -19,6 +19,12 @@ use windows_sys::Win32::{
     Foundation::*,
 };
 
+#[repr(u32)]
+pub enum DeviceState {
+    Enable = DICS_ENABLE,
+    Disable = DICS_DISABLE,
+}
+
 pub enum DeviceProperty {
     EmptyProperty, // May not be used but is here so that the enum has more that one variant
     StringProperty { data: String },
@@ -71,7 +77,12 @@ pub struct Device {
 
 impl std::fmt::Display for Device {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{}Device ID: {}", "\t".repeat(self.tree_level as usize), self.device_id)?;
+        writeln!(
+            f,
+            "{}Device ID: {}",
+            "\t".repeat(self.tree_level as usize),
+            self.device_id
+        )?;
         writeln!(
             f,
             "{} - Device Service: {}",
@@ -108,11 +119,7 @@ impl std::fmt::Display for Device {
                 "{}Sub-device:",
                 "\t".repeat(self.tree_level as usize + 1)
             )?;
-            writeln!(
-                f,
-                "{}",
-                sub_device
-            )?;
+            writeln!(f, "{}", sub_device)?;
         }
         Ok(())
     }
@@ -315,6 +322,49 @@ impl Device {
         };
         Ok(device_property)
     }
+
+    fn change_state(
+        &self,
+        new_state: DeviceState,
+        information_set: HDEVINFO,
+    ) -> Result<(), Win32Error> {
+        let property_change: SP_PROPCHANGE_PARAMS = SP_PROPCHANGE_PARAMS {
+            ClassInstallHeader: SP_CLASSINSTALL_HEADER {
+                cbSize: std::mem::size_of::<SP_CLASSINSTALL_HEADER>() as u32,
+                InstallFunction: DIF_PROPERTYCHANGE,
+            },
+            StateChange: new_state as u32,
+            Scope: DICS_FLAG_GLOBAL,
+            HwProfile: 0,
+        };
+
+        let set_params_result = unsafe {
+            SetupDiSetClassInstallParamsW(
+                information_set,
+                &self.devinfo as *const SP_DEVINFO_DATA,
+                &property_change as *const SP_PROPCHANGE_PARAMS as *const SP_CLASSINSTALL_HEADER,
+                std::mem::size_of::<SP_PROPCHANGE_PARAMS>() as u32,
+            )
+        } == TRUE;
+
+        if !set_params_result {
+            return Err(unsafe { GetLastError().into() });
+        }
+
+        let call_result = unsafe {
+            SetupDiCallClassInstaller(
+                DIF_PROPERTYCHANGE,
+                information_set,
+                &self.devinfo as *const SP_DEVINFO_DATA,
+            )
+        } == TRUE;
+
+        if !call_result {
+            return Err(unsafe { GetLastError().into() });
+        }
+
+        Ok(())
+    }
 }
 
 pub struct DeviceTracker {
@@ -352,6 +402,31 @@ impl DeviceTracker {
             device_information_set,
             devices: Self::get_listed_devices(device_information_set)?,
         })
+    }
+
+    pub fn set_device_state(&self, device_id: &str, state: DeviceState) -> Result<(), Win32Error> {
+        fn find_device_in_tree<'a>(
+            devices: &'a HashMap<Rc<str>, Device>, 
+            target_id: &str
+        ) -> Option<&'a Device> {
+            if let Some(device) = devices.get(target_id) {
+                return Some(device);
+            }
+
+            for device in devices.values() {
+                if let Some(found) = find_device_in_tree(&device.sub_interface_devices, target_id) {
+                    return Some(found);
+                }
+            }
+            
+            None
+        }
+
+        if let Some(device) = find_device_in_tree(&self.devices, device_id) {
+            device.change_state(state, self.device_information_set)
+        } else {
+            Err(Win32Error::from(ERROR_DEV_NOT_EXIST))
+        }
     }
 
     fn get_listed_devices(devinfoset: HDEVINFO) -> Result<HashMap<Rc<str>, Device>, Win32Error> {

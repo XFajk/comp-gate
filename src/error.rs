@@ -57,6 +57,9 @@ pub enum Win32Error {
     #[error("Already exists")]
     AlreadyExists,
 
+    #[error("Device does not exist")]
+    DeviceNotExist,
+
     #[error("Unknown error with code: {0}")]
     UnknownError(u32),
 }
@@ -75,15 +78,26 @@ impl From<u32> for Win32Error {
             ERROR_DISK_FULL => Win32Error::DiskFull, // ERROR_DISK_FULL
             ERROR_SEM_TIMEOUT => Win32Error::Timeout, // ERROR_SEM_TIMEOUT (treated as timeout)
             ERROR_INSUFFICIENT_BUFFER => Win32Error::InsufficientBuffer, // ERROR_INSUFFICIENT_BUFFER
-            ERROR_MORE_DATA => Win32Error::MoreData, // ERROR_MORE_DATA
-            ERROR_OPERATION_ABORTED => Win32Error::OperationAborted, // ERROR_OPERATION_ABORTED
-            ERROR_IO_PENDING => Win32Error::IoPending, // ERROR_IO_PENDING
+            ERROR_MORE_DATA => Win32Error::MoreData,                     // ERROR_MORE_DATA
+            ERROR_OPERATION_ABORTED => Win32Error::OperationAborted,     // ERROR_OPERATION_ABORTED
+            ERROR_IO_PENDING => Win32Error::IoPending,                   // ERROR_IO_PENDING
             ERROR_TIMEOUT => Win32Error::Timeout, // WAIT_TIMEOUT / ERROR_TIMEOUT
             ERROR_NO_MORE_ITEMS => Win32Error::NoMoreItems, // ERROR_NO_MORE_ITEMS (used by SetupDiEnumDeviceInfo)
-            ERROR_INVALID_DATA => Win32Error::InvalidData, // ERROR_INVALID_DATA
-            ERROR_NOT_FOUND => Win32Error::NotFound, // ERROR_NOT_FOUND
+            ERROR_INVALID_DATA => Win32Error::InvalidData,  // ERROR_INVALID_DATA
+            ERROR_NOT_FOUND => Win32Error::NotFound,        // ERROR_NOT_FOUND
             ERROR_ALREADY_EXISTS => Win32Error::AlreadyExists, // ERROR_ALREADY_EXISTS
+            ERROR_DEV_NOT_EXIST => Win32Error::DeviceNotExist, // ERROR_DEV_NOT_EXIST
             _ => Win32Error::UnknownError(code),
         }
     }
+}
+
+#[derive(Error, Debug)]
+pub enum PollEventError {
+    #[error("Win32 error occurred: {0}")]
+    Win32Error(#[from] Win32Error),
+    #[error("Thread receive error: {0}")]
+    ThreadRecvError(#[from] std::sync::mpsc::TryRecvError),
+    #[error("Thread finished")]
+    ThreadFinished,
 }

@@ -1,7 +1,7 @@
 mod error;
 mod helper;
 
-use anyhow::{Ok, Result};
+use anyhow::Result;
 use helper::device_managment::DeviceTracker;
 use helper::whitelist::Whitelist;
 

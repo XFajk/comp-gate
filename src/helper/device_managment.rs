@@ -3,6 +3,7 @@ use crate::error::{DeviceInsertionError, DeviceStringPropertyError, Win32Error};
 /// such as listing connected devices, ejecting devices, etc.
 use std::{
     collections::HashMap,
+    path::Display,
     ptr::{null, null_mut},
     rc::Rc,
 };
@@ -69,7 +70,7 @@ pub struct Device {
     pub device_id: Rc<str>,
     pub parent_id: Option<Rc<str>>,
     pub tree_level: u32,
-    pub sub_interface_devices: HashMap<Rc<str>, Device>,
+    pub devices: HashMap<Rc<str>, Device>,
 
     pub device_service: Option<Rc<str>>,
     pub device_class: Option<Rc<str>>,
@@ -116,7 +117,7 @@ impl std::fmt::Display for Device {
             "\t".repeat(self.tree_level as usize),
             self.device_description.as_deref().unwrap_or("None")
         )?;
-        for (_, sub_device) in self.sub_interface_devices.iter() {
+        for (_, sub_device) in self.devices.iter() {
             writeln!(
                 f,
                 "{}Sub-device:",
@@ -213,7 +214,7 @@ impl Device {
             device_id,
             parent_id,
             tree_level: 0,
-            sub_interface_devices: HashMap::new(),
+            devices: HashMap::new(),
             device_service,
             device_class,
             device_friendly_name,
@@ -375,6 +376,15 @@ pub struct DeviceTracker {
     pub devices: HashMap<Rc<str>, Device>,
 }
 
+impl std::fmt::Display for DeviceTracker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (_, device) in self.devices.iter() {
+            writeln!(f, "{}", device)?;
+        }
+        Ok(())
+    }
+}
+
 impl Drop for DeviceTracker {
     fn drop(&mut self) {
         if self.device_information_set == INVALID_HANDLE_VALUE as HDEVINFO {
@@ -417,7 +427,7 @@ impl DeviceTracker {
             }
 
             for device in devices.values() {
-                if let Some(found) = find_device_in_tree(&device.sub_interface_devices, target_id) {
+                if let Some(found) = find_device_in_tree(&device.devices, target_id) {
                     return Some(found);
                 }
             }
@@ -532,9 +542,7 @@ impl DeviceTracker {
                     return devices.get_mut(target_parent_id);
                 }
                 for dev in devices.values_mut() {
-                    if let Some(found) =
-                        find_parent_mut(&mut dev.sub_interface_devices, target_parent_id)
-                    {
+                    if let Some(found) = find_parent_mut(&mut dev.devices, target_parent_id) {
                         return Some(found);
                     }
                 }
@@ -546,9 +554,7 @@ impl DeviceTracker {
                 let mut child = new_device;
                 child.tree_level = parent.tree_level + 1;
 
-                parent
-                    .sub_interface_devices
-                    .insert(child.device_id.clone(), child);
+                parent.devices.insert(child.device_id.clone(), child);
                 return;
             }
         }
@@ -572,7 +578,7 @@ impl DeviceTracker {
                         orphan_id, new_device_id
                     );
                     orphan.tree_level = new_parent.tree_level + 1;
-                    new_parent.sub_interface_devices.insert(orphan_id, orphan);
+                    new_parent.devices.insert(orphan_id, orphan);
                 }
             }
         }
@@ -587,9 +593,7 @@ impl DeviceTracker {
                 devices.remove(device_id)
             } else {
                 for d in devices.values_mut() {
-                    if let Some(rd) =
-                        find_and_remove_device(&mut d.sub_interface_devices, device_id)
-                    {
+                    if let Some(rd) = find_and_remove_device(&mut d.devices, device_id) {
                         return Some(rd);
                     }
                 }
@@ -613,6 +617,37 @@ impl DeviceTracker {
         } else {
             None
         }
+    }
+}
+
+pub struct DeviceIterator<'a> {
+    stack: Vec<&'a Device>,
+}
+
+impl<'a> DeviceIterator<'a> {
+    pub fn new(devices: &'a HashMap<Rc<str>, Device>) -> Self {
+        let stack = devices.values().collect();
+
+        DeviceIterator { stack }
+    }
+}
+
+impl<'a> Iterator for DeviceIterator<'a> {
+    type Item = &'a Device;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(device) = self.stack.pop() {
+            self.stack.extend(device.devices.values());
+            Some(device)
+        } else {
+            None
+        }
+    }
+}
+
+impl DeviceTracker {
+    pub fn iter<'a>(&'a self) -> DeviceIterator<'a> {
+        DeviceIterator::new(&self.devices)
     }
 }
 
@@ -669,7 +704,7 @@ fn place_child_in_parent(
         child_device.tree_level = level + 1;
 
         parent_device
-            .sub_interface_devices
+            .devices
             .insert(child_device.device_id.clone(), child_device);
     }
 }

@@ -40,7 +40,8 @@ fn main() -> Result<()> {
                         .insert_device_by_id(&device_path_to_device_id(&device_name))
                     {
                         Ok(_) => {
-                            println!("- Device inserted into tracker")
+                            println!("- Device inserted into tracker");
+                            println!("- Current device tracker state:\n{}", whitelist.device_tracker);
                         }
                         Err(e) => println!("- Error inserting device into tracker: {}", e),
                     }
@@ -52,7 +53,8 @@ fn main() -> Result<()> {
                         .remove_device_by_id(&device_path_to_device_id(&device_name))
                     {
                         None => {
-                            println!("- Device removed from tracker")
+                            println!("- Device removed from tracker");
+                            println!("- Current device tracker state:\n{}", whitelist.device_tracker);
                         }
                         Some(e) => println!("- Error removing device from tracker: {}", e),
                     }

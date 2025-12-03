@@ -726,5 +726,5 @@ pub fn device_path_to_device_id(device_path: &str) -> Rc<str> {
     // Replace # with \
     let instance_id = path.replace('#', r"\");
 
-    instance_id.into()
+    instance_id.to_uppercase().into()
 }

@@ -10,7 +10,6 @@ use std::{
 };
 
 use windows_sys::Win32::{
-    Devices::Usb::GUID_DEVINTERFACE_USB_DEVICE,
     Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM},
     System::LibraryLoader::GetModuleHandleW,
     UI::WindowsAndMessaging::{
@@ -18,7 +17,7 @@ use windows_sys::Win32::{
         DEV_BROADCAST_DEVICEINTERFACE_W, DEVICE_NOTIFY_WINDOW_HANDLE, DefWindowProcW,
         DestroyWindow, DispatchMessageW, GetMessageW, HDEVNOTIFY, HWND_MESSAGE, RegisterClassW,
         RegisterDeviceNotificationW, TranslateMessage, UnregisterClassW,
-        UnregisterDeviceNotification, WM_DEVICECHANGE, WNDCLASSW,
+        UnregisterDeviceNotification, WM_DEVICECHANGE, WNDCLASSW, DEVICE_NOTIFY_ALL_INTERFACE_CLASSES,
     },
 };
 
@@ -47,7 +46,11 @@ fn handle_device_arrival(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) {
         return;
     }
 
-    let device_id = get_device_id(dev_brodcast).into();
+    let device_id_string = get_device_id(dev_brodcast);
+    if !device_id_string.to_uppercase().starts_with(r"\\?\USB") {
+        return;
+    }
+    let device_id = device_id_string.into();
 
     let mutex_guard = EVENT_SENDER.lock();
     if mutex_guard.is_err() {
@@ -65,7 +68,11 @@ fn handle_device_removal(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) {
         return;
     }
 
-    let device_id = get_device_id(dev_brodcast).into();
+    let device_id_string = get_device_id(dev_brodcast);
+    if !device_id_string.to_uppercase().starts_with(r"\\?\USB") {
+        return;
+    }
+    let device_id = device_id_string.into();
 
     let mutex_guard = EVENT_SENDER.lock();
     if mutex_guard.is_err() {
@@ -231,14 +238,13 @@ impl UsbConnectionCallbacksHandle {
                 let filter = DEV_BROADCAST_DEVICEINTERFACE_W {
                     dbcc_size: std::mem::size_of::<DEV_BROADCAST_DEVICEINTERFACE_W>() as u32,
                     dbcc_devicetype: DBT_DEVTYP_DEVICEINTERFACE,
-                    dbcc_classguid: GUID_DEVINTERFACE_USB_DEVICE,
                     ..std::mem::zeroed()
                 };
 
                 let notification_handle = NotificationHandle(RegisterDeviceNotificationW(
                     *hwnd,
                     &filter as *const _ as *const _,
-                    DEVICE_NOTIFY_WINDOW_HANDLE,
+                    DEVICE_NOTIFY_WINDOW_HANDLE | DEVICE_NOTIFY_ALL_INTERFACE_CLASSES,
                 ));
 
                 if notification_handle.is_null() {

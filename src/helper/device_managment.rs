@@ -3,7 +3,6 @@ use crate::error::{DeviceInsertionError, DeviceStringPropertyError, Win32Error};
 /// such as listing connected devices, ejecting devices, etc.
 use std::{
     collections::HashMap,
-    path::Display,
     ptr::{null, null_mut},
     rc::Rc,
 };

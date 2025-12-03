@@ -11,7 +11,7 @@ use crate::{
     helper::{
         device_managment::device_path_to_device_id,
         usb_connection_callback::{UsbConnectionCallbacksHandle, UsbConnectionEvent},
-        whitelist::{self, Whitelist},
+        whitelist::Whitelist,
     },
 };
 

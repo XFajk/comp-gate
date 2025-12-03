@@ -101,3 +101,21 @@ pub enum PollEventError {
     #[error("Thread finished")]
     ThreadFinished,
 }
+
+#[derive(Error, Debug)]
+pub enum DeviceInsertionError {
+    #[error("Win32 error occurred: {0}")]
+    Win32Error(#[from] Win32Error),
+
+    #[error("Device filtered out not a USB device")]
+    DeviceFilteredNotUsb,
+}
+
+#[derive(Error, Debug)]
+pub enum DeviceStringPropertyError {
+    #[error("Win32 error occurred: {0}")]
+    Win32Error(#[from] Win32Error),
+
+    #[error("Property is not a string property")]
+    PropertyNotString,
+}

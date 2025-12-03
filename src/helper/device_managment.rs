@@ -1,9 +1,8 @@
-use crate::error::Win32Error;
+use crate::error::{DeviceInsertionError, DeviceStringPropertyError, Win32Error};
 /// This file holds the functions related to device management
 /// such as listing connected devices, ejecting devices, etc.
 use std::{
     collections::HashMap,
-    panic,
     ptr::{null, null_mut},
     rc::Rc,
 };
@@ -27,16 +26,17 @@ pub enum DeviceState {
 
 pub enum DeviceProperty {
     EmptyProperty, // May not be used but is here so that the enum has more that one variant
-    StringProperty { data: String },
+    StringProperty {
+        data: String,
+    },
+    UnsupportedProperty {
+        raw_data: Rc<[u8]>,
+        property_type: DEVPROPTYPE,
+    },
 }
 
-impl TryFrom<(&[u8], DEVPROPTYPE)> for DeviceProperty {
-    // I decided on a () because there is only one place where this conversion can fail.
-    // That means creating a whole seperate Error enum for this is redundent
-    // and I will rather let the caller device how to handle failiure of this conversion
-    type Error = ();
-
-    fn try_from(value: (&[u8], DEVPROPTYPE)) -> Result<Self, Self::Error> {
+impl From<(&[u8], DEVPROPTYPE)> for DeviceProperty {
+    fn from(value: (&[u8], DEVPROPTYPE)) -> Self {
         match value.1 & DEVPROP_MASK_TYPE {
             DEVPROP_TYPE_STRING => {
                 let u16_slice: &[u16] = unsafe {
@@ -51,12 +51,15 @@ impl TryFrom<(&[u8], DEVPROPTYPE)> for DeviceProperty {
                     .position(|&c| c == 0)
                     .unwrap_or(u16_slice.len());
 
-                Ok(DeviceProperty::StringProperty {
+                DeviceProperty::StringProperty {
                     data: String::from_utf16_lossy(&u16_slice[..len]),
-                })
+                }
             }
-            DEVPROP_TYPE_EMPTY => Ok(DeviceProperty::EmptyProperty),
-            _ => Err(()),
+            DEVPROP_TYPE_EMPTY => DeviceProperty::EmptyProperty,
+            _ => DeviceProperty::UnsupportedProperty {
+                raw_data: value.0.into(), // CLONING THE SLICE DATA
+                property_type: value.1,
+            },
         }
     }
 }
@@ -130,17 +133,17 @@ impl Device {
         devinfo: SP_DEVINFO_DATA,
         devinfoset: HDEVINFO,
     ) -> Result<Self, Win32Error> {
-        let device_id = Self::retrive_device_id(devinfo, devinfoset)?;
+        let device_id = Self::retrieve_device_id(devinfo, devinfoset)?;
 
         let parent_id = match unsafe {
-            Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_Parent)
+            Self::retrieve_string_property(devinfo, devinfoset, &DEVPKEY_Device_Parent)
         } {
             Ok(prop) => Some(prop.to_uppercase().into()),
             Err(_) => None,
         };
 
         let device_service = match unsafe {
-            Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_Service)
+            Self::retrieve_string_property(devinfo, devinfoset, &DEVPKEY_Device_Service)
         } {
             Ok(prop) => Some(prop.to_lowercase().into()),
             Err(e) => {
@@ -153,7 +156,7 @@ impl Device {
         };
 
         let device_class = match unsafe {
-            Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_Class)
+            Self::retrieve_string_property(devinfo, devinfoset, &DEVPKEY_Device_Class)
         } {
             Ok(prop) => Some(prop),
             Err(e) => {
@@ -166,7 +169,7 @@ impl Device {
         };
 
         let device_type = match unsafe {
-            Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_DevType)
+            Self::retrieve_string_property(devinfo, devinfoset, &DEVPKEY_Device_DevType)
         } {
             Ok(prop) => Some(prop),
             Err(e) => {
@@ -179,7 +182,7 @@ impl Device {
         };
 
         let device_description = unsafe {
-            match Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_DeviceDesc) {
+            match Self::retrieve_string_property(devinfo, devinfoset, &DEVPKEY_Device_DeviceDesc) {
                 Ok(prop) => Some(prop),
                 Err(e) => {
                     println!(
@@ -192,7 +195,8 @@ impl Device {
         };
 
         let device_friendly_name = unsafe {
-            match Self::retrive_string_property(devinfo, devinfoset, &DEVPKEY_Device_FriendlyName) {
+            match Self::retrieve_string_property(devinfo, devinfoset, &DEVPKEY_Device_FriendlyName)
+            {
                 Ok(prop) => Some(prop),
                 Err(e) => {
                     println!(
@@ -218,7 +222,7 @@ impl Device {
         })
     }
 
-    fn retrive_device_id(
+    fn retrieve_device_id(
         devinfo: SP_DEVINFO_DATA,
         devinfoset: HDEVINFO,
     ) -> Result<Rc<str>, Win32Error> {
@@ -262,7 +266,7 @@ impl Device {
         }
     }
 
-    fn retrive_device_property(
+    fn retrieve_device_property(
         devinfo: SP_DEVINFO_DATA,
         devinfoset: HDEVINFO,
         property: &DEVPROPKEY,
@@ -307,18 +311,17 @@ impl Device {
         }
     }
 
-    unsafe fn retrive_string_property(
+    unsafe fn retrieve_string_property(
         devinfo: SP_DEVINFO_DATA,
         devinfoset: HDEVINFO,
         property: &DEVPROPKEY,
-    ) -> Result<Rc<str>, Win32Error> {
-        let device_property = Device::retrive_device_property(devinfo, devinfoset, property)?;
+    ) -> Result<Rc<str>, DeviceStringPropertyError> {
+        let device_property = Device::retrieve_device_property(devinfo, devinfoset, property)?;
         let device_property =
-            DeviceProperty::try_from((device_property.0.as_slice(), device_property.1))
-                .expect("Failed to convert the Device Type Property!");
+            DeviceProperty::from((device_property.0.as_slice(), device_property.1));
         let device_property = match device_property {
             DeviceProperty::StringProperty { data } => Rc::from(data),
-            _ => panic!("Unexpected property type for Device Type!"),
+            _ => return Err(DeviceStringPropertyError::PropertyNotString),
         };
         Ok(device_property)
     }
@@ -406,8 +409,8 @@ impl DeviceTracker {
 
     pub fn set_device_state(&self, device_id: &str, state: DeviceState) -> Result<(), Win32Error> {
         fn find_device_in_tree<'a>(
-            devices: &'a HashMap<Rc<str>, Device>, 
-            target_id: &str
+            devices: &'a HashMap<Rc<str>, Device>,
+            target_id: &str,
         ) -> Option<&'a Device> {
             if let Some(device) = devices.get(target_id) {
                 return Some(device);
@@ -418,7 +421,7 @@ impl DeviceTracker {
                     return Some(found);
                 }
             }
-            
+
             None
         }
 
@@ -466,6 +469,150 @@ impl DeviceTracker {
 
         println!("Total devices found: {}", devices.len());
         Ok(convert_devices_into_tree(devices))
+    }
+
+    pub fn insert_device_by_id(&mut self, device_id: &str) -> Result<(), DeviceInsertionError> {
+        let device_id_wide = device_id
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u16>>();
+
+        let mut device_info: SP_DEVINFO_DATA = unsafe { std::mem::zeroed() };
+        device_info.cbSize = std::mem::size_of::<SP_DEVINFO_DATA>() as u32;
+
+        let insertion_result = unsafe {
+            SetupDiOpenDeviceInfoW(
+                self.device_information_set,
+                device_id_wide.as_ptr(),
+                null_mut(),
+                0,
+                &mut device_info as *mut SP_DEVINFO_DATA,
+            )
+        } == TRUE;
+
+        if !insertion_result {
+            return Err(unsafe { DeviceInsertionError::from(Win32Error::from(GetLastError())) });
+        }
+
+        let new_device = Device::from_bare_devinfo(device_info, self.device_information_set)?;
+
+        if device_filter_function(&new_device) {
+            let deletion_result = unsafe {
+                SetupDiDeleteDeviceInfo(
+                    self.device_information_set,
+                    &device_info as *const SP_DEVINFO_DATA,
+                )
+            } == TRUE;
+            if !deletion_result {
+                println!(
+                    "Warning: Could not delete filtered device {} after insertion failure. because of {}",
+                    device_id,
+                    Win32Error::from(unsafe { GetLastError() })
+                );
+            }
+
+            return Err(DeviceInsertionError::DeviceFilteredNotUsb);
+        }
+
+        self.insert_deivice_into_tree(new_device);
+
+        Ok(())
+    }
+
+    fn insert_deivice_into_tree(&mut self, new_device: Device) {
+        let new_device_id = new_device.device_id.clone();
+
+        if let Some(parent_id) = &new_device.parent_id {
+            /// Helper to recursively find a parent in the existing tree
+            fn find_parent_mut<'a>(
+                devices: &'a mut HashMap<Rc<str>, Device>,
+                target_parent_id: &str,
+            ) -> Option<&'a mut Device> {
+                if devices.contains_key(target_parent_id) {
+                    return devices.get_mut(target_parent_id);
+                }
+                for dev in devices.values_mut() {
+                    if let Some(found) =
+                        find_parent_mut(&mut dev.sub_interface_devices, target_parent_id)
+                    {
+                        return Some(found);
+                    }
+                }
+                None
+            }
+
+            if let Some(parent) = find_parent_mut(&mut self.devices, parent_id) {
+                // Update tree level based on parent
+                let mut child = new_device;
+                child.tree_level = parent.tree_level + 1;
+
+                parent
+                    .sub_interface_devices
+                    .insert(child.device_id.clone(), child);
+                return;
+            }
+        }
+
+        self.devices.insert(new_device_id.clone(), new_device);
+
+        let orphan_ids: Vec<Rc<str>> = self
+            .devices
+            .iter()
+            .filter(|(_, dev)| {
+                dev.parent_id.as_ref().map(|p| p.as_ref()) == Some(new_device_id.as_ref())
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        for orphan_id in orphan_ids {
+            if let Some(mut orphan) = self.devices.remove(&orphan_id) {
+                if let Some(new_parent) = self.devices.get_mut(&new_device_id) {
+                    println!(
+                        "- Re-parenting orphan device {} under {}",
+                        orphan_id, new_device_id
+                    );
+                    orphan.tree_level = new_parent.tree_level + 1;
+                    new_parent.sub_interface_devices.insert(orphan_id, orphan);
+                }
+            }
+        }
+    }
+
+    pub fn remove_device_by_id(&mut self, device_id: &str) -> Option<Win32Error> {
+        fn find_and_remove_device(
+            devices: &mut HashMap<Rc<str>, Device>,
+            device_id: &str,
+        ) -> Option<Device> {
+            if devices.contains_key(device_id) {
+                devices.remove(device_id)
+            } else {
+                for d in devices.values_mut() {
+                    if let Some(rd) =
+                        find_and_remove_device(&mut d.sub_interface_devices, device_id)
+                    {
+                        return Some(rd);
+                    }
+                }
+                None
+            }
+        }
+
+        if let Some(d) = find_and_remove_device(&mut self.devices, device_id) {
+            let deletion_result = unsafe {
+                SetupDiDeleteDeviceInfo(
+                    self.device_information_set,
+                    &d.devinfo as *const SP_DEVINFO_DATA,
+                )
+            } == TRUE;
+
+            if !deletion_result {
+                Some(unsafe { GetLastError().into() })
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 }
 
@@ -525,4 +672,24 @@ fn place_child_in_parent(
             .sub_interface_devices
             .insert(child_device.device_id.clone(), child_device);
     }
+}
+
+/// Extract device instance ID from device interface path
+/// Input:  \\?\USB#VID_046D&PID_C52B#5&2752457f&0&2#{a5dcbf10-6530-11d2-901f-00c04fb951ed}
+/// Output: USB\VID_046D&PID_C52B\5&2752457f&0&2
+pub fn device_path_to_device_id(device_path: &str) -> Rc<str> {
+    // Remove \\?\ prefix
+    let path = device_path.strip_prefix(r"\\?\").unwrap_or(device_path);
+
+    // Remove GUID suffix (everything after the last #)
+    let path = if let Some(pos) = path.rfind('#') {
+        &path[..pos]
+    } else {
+        path
+    };
+
+    // Replace # with \
+    let instance_id = path.replace('#', r"\");
+
+    instance_id.into()
 }

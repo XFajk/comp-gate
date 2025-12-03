@@ -5,7 +5,7 @@ use anyhow::Result;
 use helper::device_managment::DeviceTracker;
 use helper::whitelist::Whitelist;
 
-use crate::{error::PollEventError, helper::usb_connection_callback::{UsbConnectionCallbacksHandle, UsbConnectionEvent}};
+use crate::{error::PollEventError, helper::{device_managment::device_path_to_device_id, usb_connection_callback::{UsbConnectionCallbacksHandle, UsbConnectionEvent}}};
 
 // TODO list of tasks to implement:
 // - [#] Implement device tracking functionality
@@ -14,7 +14,7 @@ use crate::{error::PollEventError, helper::usb_connection_callback::{UsbConnecti
 // - [_] Implement GUI using egui around the core functionality
 
 fn main() -> Result<()> {
-    let device_tracker = DeviceTracker::load()?;
+    let mut device_tracker = DeviceTracker::load()?;
     for (_, device) in device_tracker.devices.iter() {
         println!("{}", device);
     }
@@ -26,9 +26,17 @@ fn main() -> Result<()> {
             Ok(event) => match event {
                 UsbConnectionEvent::Connected(device_name) => {
                     println!("USB Device connected: {:?}", device_name);
+                    match device_tracker.insert_device_by_id(&device_path_to_device_id(&device_name)) {
+                        Ok(_) => println!("- Device inserted into tracker"),
+                        Err(e) => println!("- Error inserting device into tracker: {}", e),
+                    }
                 }
                 UsbConnectionEvent::Disconnected(device_name) => {
                     println!("USB Device disconnected: {:?}", device_name);
+                    match device_tracker.remove_device_by_id(&device_path_to_device_id(&device_name)) {
+                        None => println!("- Device removed from tracker"),
+                        Some(e) => println!("- Error removing device from tracker: {}", e),
+                    }
                 }
             },
             Err(e) => {

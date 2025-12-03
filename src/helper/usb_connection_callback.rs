@@ -27,7 +27,7 @@ use crate::error::{PollEventError, Win32Error};
 static EVENT_SENDER: LazyLock<Mutex<Option<Sender<UsbConnectionEvent>>>> =
     LazyLock::new(|| Mutex::new(None));
 
-fn get_get_device_id(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) -> String {
+fn get_device_id(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) -> String {
     unsafe {
         let dbcc_name_ptr = (*dev_brodcast).dbcc_name.as_ptr();
 
@@ -47,7 +47,7 @@ fn handle_device_arrival(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) {
         return;
     }
 
-    let device_id = get_get_device_id(dev_brodcast).into();
+    let device_id = get_device_id(dev_brodcast).into();
 
     let mutex_guard = EVENT_SENDER.lock();
     if mutex_guard.is_err() {
@@ -65,7 +65,7 @@ fn handle_device_removal(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) {
         return;
     }
 
-    let device_id = get_get_device_id(dev_brodcast).into();
+    let device_id = get_device_id(dev_brodcast).into();
 
     let mutex_guard = EVENT_SENDER.lock();
     if mutex_guard.is_err() {

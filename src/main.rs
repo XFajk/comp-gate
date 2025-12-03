@@ -1,6 +1,8 @@
 mod error;
 mod helper;
 
+use std::sync::mpsc::TryRecvError;
+
 use anyhow::Result;
 use helper::device_managment::DeviceTracker;
 use helper::whitelist::Whitelist;
@@ -10,7 +12,8 @@ use crate::{error::PollEventError, helper::{device_managment::device_path_to_dev
 // TODO list of tasks to implement:
 // - [#] Implement device tracking functionality
 // - [#] Implement device blocking functionality
-// - [_] Combine last two points into a Whitelist/Blacklist system
+// - [#] Implement whitelist functionality
+// - [_] Combine last three points into a Whitelist/Blacklist system
 // - [_] Implement GUI using egui around the core functionality
 
 fn main() -> Result<()> {
@@ -45,8 +48,9 @@ fn main() -> Result<()> {
                         println!("USB connection callback thread has finished");
                         break;
                     }
+                    PollEventError::ThreadRecvError(TryRecvError::Empty) => {}
                     _ => {
-                        return Err(e.into())
+                        return Err(e.into());
                     }
                 }
             }

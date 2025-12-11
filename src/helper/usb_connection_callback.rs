@@ -14,10 +14,10 @@ use windows_sys::Win32::{
     System::LibraryLoader::GetModuleHandleW,
     UI::WindowsAndMessaging::{
         CreateWindowExW, DBT_DEVICEARRIVAL, DBT_DEVICEREMOVECOMPLETE, DBT_DEVTYP_DEVICEINTERFACE,
-        DEV_BROADCAST_DEVICEINTERFACE_W, DEVICE_NOTIFY_WINDOW_HANDLE, DefWindowProcW,
-        DestroyWindow, DispatchMessageW, GetMessageW, HDEVNOTIFY, HWND_MESSAGE, RegisterClassW,
-        RegisterDeviceNotificationW, TranslateMessage, UnregisterClassW,
-        UnregisterDeviceNotification, WM_DEVICECHANGE, WNDCLASSW, DEVICE_NOTIFY_ALL_INTERFACE_CLASSES,
+        DEV_BROADCAST_DEVICEINTERFACE_W, DEVICE_NOTIFY_ALL_INTERFACE_CLASSES,
+        DEVICE_NOTIFY_WINDOW_HANDLE, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
+        HDEVNOTIFY, HWND_MESSAGE, RegisterClassW, RegisterDeviceNotificationW, TranslateMessage,
+        UnregisterClassW, UnregisterDeviceNotification, WM_DEVICECHANGE, WNDCLASSW,
     },
 };
 
@@ -26,7 +26,7 @@ use crate::error::{PollEventError, Win32Error};
 static EVENT_SENDER: LazyLock<Mutex<Option<Sender<UsbConnectionEvent>>>> =
     LazyLock::new(|| Mutex::new(None));
 
-fn get_device_id(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) -> String {
+fn get_device_path(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) -> String {
     unsafe {
         let dbcc_name_ptr = (*dev_brodcast).dbcc_name.as_ptr();
 
@@ -46,11 +46,12 @@ fn handle_device_arrival(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) {
         return;
     }
 
-    let device_id_string = get_device_id(dev_brodcast);
-    if !device_id_string.to_uppercase().starts_with(r"\\?\USB") {
+    let device_path_string = get_device_path(dev_brodcast);
+    if !device_path_string.to_uppercase().starts_with(r"\\?\USB#") {
+        println!("Filtered out a device: {}", device_path_string);
         return;
     }
-    let device_id = device_id_string.into();
+    let device_path = device_path_string.into();
 
     let mutex_guard = EVENT_SENDER.lock();
     if mutex_guard.is_err() {
@@ -58,7 +59,7 @@ fn handle_device_arrival(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) {
     }
 
     if let Some(sender) = &*mutex_guard.unwrap() {
-        let _ = sender.send(UsbConnectionEvent::Connected(device_id));
+        let _ = sender.send(UsbConnectionEvent::Connected(device_path));
     }
 }
 
@@ -68,11 +69,11 @@ fn handle_device_removal(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) {
         return;
     }
 
-    let device_id_string = get_device_id(dev_brodcast);
-    if !device_id_string.to_uppercase().starts_with(r"\\?\USB") {
+    let device_path_string = get_device_path(dev_brodcast);
+    if !device_path_string.to_uppercase().starts_with(r"\\?\USB#") {
         return;
     }
-    let device_id = device_id_string.into();
+    let device_path = device_path_string.into();
 
     let mutex_guard = EVENT_SENDER.lock();
     if mutex_guard.is_err() {
@@ -80,7 +81,7 @@ fn handle_device_removal(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) {
     }
 
     if let Some(sender) = &*mutex_guard.unwrap() {
-        let _ = sender.send(UsbConnectionEvent::Disconnected(device_id));
+        let _ = sender.send(UsbConnectionEvent::Disconnected(device_path));
     }
 }
 

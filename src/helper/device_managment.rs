@@ -396,26 +396,6 @@ impl Drop for DeviceTracker {
 }
 
 impl DeviceTracker {
-    pub fn load() -> Result<Self, Win32Error> {
-        let device_information_set: HDEVINFO = unsafe {
-            SetupDiGetClassDevsA(
-                null(),
-                c"USB".as_ptr() as *const u8,
-                null_mut(),
-                DIGCF_ALLCLASSES | DIGCF_PRESENT,
-            )
-        };
-
-        if device_information_set == INVALID_HANDLE_VALUE as HDEVINFO {
-            return Err(unsafe { GetLastError().into() });
-        }
-
-        Ok(DeviceTracker {
-            device_information_set,
-            devices: Self::get_listed_devices(device_information_set)?,
-        })
-    }
-
     pub fn set_device_state(&self, device_id: &str, state: DeviceState) -> Result<(), Win32Error> {
         fn find_device_in_tree<'a>(
             devices: &'a HashMap<Rc<str>, Device>,
@@ -441,67 +421,9 @@ impl DeviceTracker {
         }
     }
 
-    fn get_listed_devices(devinfoset: HDEVINFO) -> Result<HashMap<Rc<str>, Device>, Win32Error> {
-        let mut devices: HashMap<Rc<str>, Device> = HashMap::new();
-        let mut index: u32 = 0;
-
-        loop {
-            unsafe {
-                println!("Attempting to enumerate device at index: {}", index);
-                let mut device_data: SP_DEVINFO_DATA = std::mem::zeroed();
-                device_data.cbSize = std::mem::size_of::<SP_DEVINFO_DATA>() as u32;
-                let operation_result = SetupDiEnumDeviceInfo(
-                    devinfoset,
-                    index,
-                    &mut device_data as *mut SP_DEVINFO_DATA,
-                ) == TRUE;
-
-                if operation_result {
-                    let next_device = Device::from_bare_devinfo(device_data, devinfoset)?;
-
-                    if !device_filter_function(&next_device) {
-                        devices.insert(next_device.device_id.clone(), next_device);
-                    }
-                    println!("\t- Device found at index: {}", index);
-                    index += 1;
-                } else {
-                    println!("\t- No device found at index: {}", index);
-                    let error = GetLastError();
-                    if error == ERROR_NO_MORE_ITEMS {
-                        break;
-                    } else {
-                        return Err(error.into());
-                    }
-                }
-            }
-        }
-
-        println!("Total devices found: {}", devices.len());
-        Ok(convert_devices_into_tree(devices))
-    }
-
     pub fn insert_device_by_id(&mut self, device_id: &str) -> Result<(), DeviceInsertionError> {
-        let device_id_wide = device_id
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect::<Vec<u16>>();
-
-        let mut device_info: SP_DEVINFO_DATA = unsafe { std::mem::zeroed() };
-        device_info.cbSize = std::mem::size_of::<SP_DEVINFO_DATA>() as u32;
-
-        let insertion_result = unsafe {
-            SetupDiOpenDeviceInfoW(
-                self.device_information_set,
-                device_id_wide.as_ptr(),
-                null_mut(),
-                0,
-                &mut device_info as *mut SP_DEVINFO_DATA,
-            )
-        } == TRUE;
-
-        if !insertion_result {
-            return Err(unsafe { DeviceInsertionError::from(Win32Error::from(GetLastError())) });
-        }
+        let device_info =
+            Self::add_device_to_device_information_set(self.device_information_set, device_id)?;
 
         let new_device = Device::from_bare_devinfo(device_info, self.device_information_set)?;
 
@@ -619,6 +541,206 @@ impl DeviceTracker {
     }
 }
 
+// this separate impl block is to only visually separate associated functions
+impl DeviceTracker {
+    fn get_class_devs(class_name: *const u8) -> Result<HDEVINFO, Win32Error> {
+        let devinfo_set: HDEVINFO = unsafe {
+            SetupDiGetClassDevsA(
+                null(),
+                class_name,
+                null_mut(),
+                DIGCF_ALLCLASSES | DIGCF_PRESENT,
+            )
+        };
+
+        if devinfo_set == INVALID_HANDLE_VALUE as HDEVINFO {
+            return Err(unsafe { GetLastError().into() });
+        }
+
+        Ok(devinfo_set)
+    }
+
+    pub fn load() -> Result<Self, Win32Error> {
+        let usb_device_information_set = Self::get_class_devs(c"USB".as_ptr() as *const u8)?;
+        let hid_device_information_set = Self::get_class_devs(c"HID".as_ptr() as *const u8)?;
+
+        Self::merge_device_information_sets(&[
+            usb_device_information_set,
+            hid_device_information_set,
+        ])
+    }
+
+    fn get_listed_devices(devinfoset: HDEVINFO) -> Result<HashMap<Rc<str>, Device>, Win32Error> {
+        let mut devices: HashMap<Rc<str>, Device> = HashMap::new();
+        let mut index: u32 = 0;
+
+        loop {
+            unsafe {
+                println!("Attempting to enumerate device at index: {}", index);
+                let mut device_data: SP_DEVINFO_DATA = std::mem::zeroed();
+                device_data.cbSize = std::mem::size_of::<SP_DEVINFO_DATA>() as u32;
+                let operation_result = SetupDiEnumDeviceInfo(
+                    devinfoset,
+                    index,
+                    &mut device_data as *mut SP_DEVINFO_DATA,
+                ) == TRUE;
+
+                if operation_result {
+                    let next_device = Device::from_bare_devinfo(device_data, devinfoset)?;
+
+                    if !device_filter_function(&next_device) {
+                        devices.insert(next_device.device_id.clone(), next_device);
+                    }
+                    println!("\t- Device found at index: {}", index);
+                    index += 1;
+                } else {
+                    println!("\t- No device found at index: {}", index);
+                    let error = GetLastError();
+                    if error == ERROR_NO_MORE_ITEMS {
+                        break;
+                    } else {
+                        return Err(error.into());
+                    }
+                }
+            }
+        }
+
+        println!("Total devices found: {}", devices.len());
+        Ok(convert_devices_into_tree(devices))
+    }
+
+    fn merge_device_information_sets(sets: &[HDEVINFO]) -> Result<Self, Win32Error> {
+        let merged_set = unsafe { SetupDiCreateDeviceInfoList(null(), null_mut()) };
+        let mut merged_devices = HashMap::new();
+
+        for set in sets.iter() {
+            let devices = DeviceTracker::get_listed_devices(*set)?;
+            for device in DeviceIterator::from(&devices) {
+                Self::add_device_to_device_information_set(merged_set, &device.device_id)?;
+            }
+            Self::merge_device_trees(&mut merged_devices, devices);
+        }
+
+        Ok(Self {
+            device_information_set: merged_set,
+            devices: merged_devices,
+        })
+    }
+
+    fn add_device_to_device_information_set(
+        device_information_set: HDEVINFO,
+        device_id: &str,
+    ) -> Result<SP_DEVINFO_DATA, Win32Error> {
+        let device_id_wide = device_id
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u16>>();
+
+        let mut device_info: SP_DEVINFO_DATA = unsafe { std::mem::zeroed() };
+        device_info.cbSize = std::mem::size_of::<SP_DEVINFO_DATA>() as u32;
+
+        let insertion_result = unsafe {
+            SetupDiOpenDeviceInfoW(
+                device_information_set,
+                device_id_wide.as_ptr(),
+                null_mut(),
+                0,
+                &mut device_info as *mut SP_DEVINFO_DATA,
+            )
+        } == TRUE;
+
+        if !insertion_result {
+            Err(unsafe { Win32Error::from(GetLastError()) })
+        } else {
+            Ok(device_info)
+        }
+    }
+
+    /// Merges two device trees into one by finding the correct parent-child relationships.
+    ///
+    /// This function takes a base tree and a tree to merge, then iterates through all devices
+    /// in the tree_to_merge and inserts them into the correct position in the base tree based
+    /// on their parent_id relationships.
+    ///
+    /// # Arguments
+    /// * `base_tree` - The target tree that will receive all devices (will be modified in place)
+    /// * `tree_to_merge` - The source tree whose devices will be merged into base_tree
+    pub fn merge_device_trees(
+        base_tree: &mut HashMap<Rc<str>, Device>,
+        tree_to_merge: HashMap<Rc<str>, Device>,
+    ) {
+        // Collect all devices from tree_to_merge into a flat Vec
+        // We need to do this because we can't iterate over tree_to_merge while moving devices out
+        let mut devices_to_insert = Vec::new();
+
+        fn collect_devices(devices: HashMap<Rc<str>, Device>, collector: &mut Vec<Device>) {
+            for (_, mut device) in devices {
+                let children = std::mem::take(&mut device.devices);
+                collector.push(device);
+                collect_devices(children, collector);
+            }
+        }
+
+        collect_devices(tree_to_merge, &mut devices_to_insert);
+
+        // Helper function to recursively find a device by ID in the tree
+        fn find_device_mut<'a>(
+            devices: &'a mut HashMap<Rc<str>, Device>,
+            target_id: &str,
+        ) -> Option<&'a mut Device> {
+            if devices.contains_key(target_id) {
+                return devices.get_mut(target_id);
+            }
+            for dev in devices.values_mut() {
+                if let Some(found) = find_device_mut(&mut dev.devices, target_id) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        // Insert each device into the correct location in base_tree
+        for mut device in devices_to_insert {
+            let device_id = device.device_id.clone();
+
+            // Try to find the parent in the base tree
+            if let Some(parent_id) = &device.parent_id {
+                if let Some(parent) = find_device_mut(base_tree, parent_id) {
+                    // Found the parent, insert as a child
+                    device.tree_level = parent.tree_level + 1;
+                    parent.devices.insert(device_id, device);
+                    continue;
+                }
+            }
+
+            // No parent found (or no parent_id), insert at root level
+            device.tree_level = 0;
+            let inserted_device_id = device_id.clone();
+            base_tree.insert(device_id, device);
+
+            // Check if any existing root-level devices should be re-parented under this new device
+            let orphan_ids: Vec<Rc<str>> = base_tree
+                .iter()
+                .filter(|(id, dev)| {
+                    **id != inserted_device_id
+                        && dev.parent_id.as_ref().map(|p| p.as_ref())
+                            == Some(inserted_device_id.as_ref())
+                })
+                .map(|(id, _)| id.clone())
+                .collect();
+
+            for orphan_id in orphan_ids {
+                if let Some(mut orphan) = base_tree.remove(&orphan_id) {
+                    if let Some(new_parent) = base_tree.get_mut(&inserted_device_id) {
+                        orphan.tree_level = new_parent.tree_level + 1;
+                        new_parent.devices.insert(orphan_id, orphan);
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub struct DeviceIterator<'a> {
     stack: Vec<&'a Device>,
 }
@@ -628,6 +750,12 @@ impl<'a> DeviceIterator<'a> {
         let stack = devices.values().collect();
 
         DeviceIterator { stack }
+    }
+}
+
+impl<'a> From<&'a HashMap<Rc<str>, Device>> for DeviceIterator<'a> {
+    fn from(devices: &'a HashMap<Rc<str>, Device>) -> Self {
+        Self::new(devices)
     }
 }
 

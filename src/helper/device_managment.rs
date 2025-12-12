@@ -1,6 +1,7 @@
-use crate::error::{DeviceInsertionError, DeviceStringPropertyError, Win32Error};
 /// This file holds the functions related to device management
 /// such as listing connected devices, ejecting devices, etc.
+use crate::error::{DeviceInsertionError, DeviceStringPropertyError, Win32Error};
+
 use std::{
     collections::HashMap,
     ptr::{null, null_mut},

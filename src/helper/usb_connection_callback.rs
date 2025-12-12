@@ -46,8 +46,12 @@ fn handle_device_arrival(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) {
         return;
     }
 
-    let device_path_string = get_device_path(dev_brodcast);
-    if !device_path_string.to_uppercase().starts_with(r"\\?\USB#") {
+    let device_path_string = get_device_path(dev_brodcast).to_uppercase();
+
+    let filter = !device_path_string.starts_with(r"\\?\USB#")
+        && !device_path_string.starts_with(r"\\?\HID#");
+
+    if filter {
         println!("Filtered out a device: {}", device_path_string);
         return;
     }
@@ -69,8 +73,13 @@ fn handle_device_removal(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) {
         return;
     }
 
-    let device_path_string = get_device_path(dev_brodcast);
-    if !device_path_string.to_uppercase().starts_with(r"\\?\USB#") {
+    let device_path_string = get_device_path(dev_brodcast).to_uppercase();
+
+    let filter = !device_path_string.starts_with(r"\\?\USB#")
+        && !device_path_string.starts_with(r"\\?\HID#");
+
+    if filter {
+        println!("Filtered out a device: {}", device_path_string);
         return;
     }
     let device_path = device_path_string.into();

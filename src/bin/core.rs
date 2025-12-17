@@ -28,7 +28,7 @@ use std::{
 
 use anyhow::Result;
 
-use comp_gate::{helper::ioapi::CONNECTION_FILE_PATH, *};
+use comp_gate::{helper::ioapi::connection_file_path, *};
 use error::PollEventError;
 use helper::{
     device_managment::{DeviceTracker, device_path_to_device_id},
@@ -63,7 +63,7 @@ fn main() -> Result<()> {
         ioapi_listener.local_addr()?
     );
     std::fs::write(
-        CONNECTION_FILE_PATH,
+        connection_file_path(),
         ioapi_listener.local_addr()?.to_string(),
     )?;
 

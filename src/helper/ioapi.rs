@@ -8,15 +8,20 @@
 //! - Serializing commands into byte requests (`IoApiRequest`).
 //! - Locating the connection address for the core service.
 
-use std::{net::SocketAddr, ops::Deref, rc::Rc};
+use std::{net::SocketAddr, ops::Deref, path::PathBuf, rc::Rc};
 
-/// The file path where the core service writes its connection address.
-#[cfg(target_family = "windows")]
-pub const CONNECTION_FILE_PATH: &'static str = r"C:\Users\Rudolf Vrbensky\comp-gate.txt";
-
-/// The file path where the core service writes its connection address (Unix fallback).
-#[cfg(target_family = "unix")]
-pub const CONNECTION_FILE_PATH: &'static str = "/tmp/comp-gate.txt";
+/// Returns a per-user OS temporary directory path for the connection file.
+///
+/// This uses `std::env::temp_dir()` which maps to:
+/// - On Unix: typically `/tmp`
+/// - On Windows: `%TEMP%` / `%TMP%`
+/// - On macOS: typically `/var/folders/.../T` or similar
+///
+/// Using the OS temporary directory avoids hardcoding usernames or absolute paths
+/// that won't exist on other users' machines.
+pub fn connection_file_path() -> PathBuf {
+    std::env::temp_dir().join("comp-gate.txt")
+}
 
 /// Represents the available commands in the IOAPI protocol.
 ///
@@ -126,7 +131,7 @@ impl Deref for IoApiRequest {
 
 /// Retrieves the socket address of the running core service.
 ///
-/// This function reads the connection file (defined by `CONNECTION_FILE_PATH`)
+/// This function reads the connection file (located in the OS temporary directory)
 /// to find the IP and port where the core service is listening.
 ///
 /// # Returns
@@ -134,15 +139,23 @@ impl Deref for IoApiRequest {
 /// * `Ok(SocketAddr)` - The address of the core service.
 /// * `Err(anyhow::Error)` - If the file cannot be read or parsed.
 pub fn get_core_connection_addr() -> anyhow::Result<SocketAddr> {
-    let addr_line: Box<str> = std::fs::read_to_string(CONNECTION_FILE_PATH)?
+    let path = connection_file_path();
+    let content = std::fs::read_to_string(&path)?;
+    let first_line = content
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("Connection file is empty"))?
         .trim()
-        .split("\n")
-        .collect::<Vec<&str>>()[0]
-        .into();
+        .to_string();
 
-    let addr_parts = addr_line.split(":").collect::<Vec<&str>>();
-    let ip = addr_parts[0];
-    let port = addr_parts[1].parse::<u16>()?;
+    let mut parts = first_line.split(':');
+    let ip_str = parts
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Malformed address"))?;
+    let port_str = parts
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Malformed address"))?;
+    let port = port_str.parse::<u16>()?;
 
-    Ok(SocketAddr::new(ip.parse()?, port))
+    Ok(SocketAddr::new(ip_str.parse()?, port))
 }

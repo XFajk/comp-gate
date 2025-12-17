@@ -1,6 +1,3 @@
-mod error;
-mod helper;
-
 use std::{
     io::{Read, Write},
     net::{Ipv4Addr, TcpListener, TcpStream},
@@ -9,16 +6,14 @@ use std::{
 };
 
 use anyhow::Result;
-use helper::device_managment::DeviceTracker;
 
-use crate::{
-    error::PollEventError,
-    helper::{
-        device_managment::device_path_to_device_id,
-        ioapi::IoApiCommand,
-        usb_connection_callback::{UsbConnectionCallbacksHandle, UsbConnectionEvent},
-        whitelist::Whitelist,
-    },
+use comp_gate::{helper::ioapi::CONNECTION_FILE_PATH, *};
+use error::PollEventError;
+use helper::{
+    device_managment::{DeviceTracker, device_path_to_device_id},
+    ioapi::IoApiCommand,
+    usb_connection_callback::{UsbConnectionCallbacksHandle, UsbConnectionEvent},
+    whitelist::Whitelist,
 };
 
 // TODO list of tasks to implement:
@@ -37,7 +32,7 @@ fn main() -> Result<()> {
         ioapi_listener.local_addr()?
     );
     std::fs::write(
-        "C:\\Users\\Rudolf Vrbensky\\comp-gate.txt",
+        CONNECTION_FILE_PATH,
         ioapi_listener.local_addr()?.to_string(),
     )?;
 

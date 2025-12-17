@@ -73,10 +73,10 @@ impl TryFrom<&[&str]> for IoApiCommand {
     /// ```
     fn try_from(cmd_tokens: &[&str]) -> Result<Self, Self::Error> {
         match cmd_tokens[0] {
-            "get_device_list" => Ok(IoApiCommand::GetDeviceList),
-            "disable_device" => Ok(IoApiCommand::DisableDevice(Rc::from(cmd_tokens[1]))),
-            "enable_device" => Ok(IoApiCommand::EnableDevice(Rc::from(cmd_tokens[1]))),
-            "get_device_connection_logs" => Ok(IoApiCommand::GetDeviceConnectionLogs),
+            "list" => Ok(IoApiCommand::GetDeviceList),
+            "logs" => Ok(IoApiCommand::DisableDevice(Rc::from(cmd_tokens[1]))),
+            "enable" => Ok(IoApiCommand::EnableDevice(Rc::from(cmd_tokens[1]))),
+            "disable" => Ok(IoApiCommand::GetDeviceConnectionLogs),
             _ => Err(()),
         }
     }

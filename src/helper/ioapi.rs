@@ -1,23 +1,41 @@
-//! This module defines the IOAPI protocol for communicating between comp-gate applications
+//! # IOAPI Module
+//!
+//! This module defines the IOAPI protocol used for inter-process communication (IPC)
+//! between different components of the `comp-gate` system (e.g., the core service and the shell/GUI).
+//!
+//! It handles:
+//! - Defining the command structure (`IoApiCommand`).
+//! - Serializing commands into byte requests (`IoApiRequest`).
+//! - Locating the connection address for the core service.
 
 use std::{net::SocketAddr, ops::Deref, rc::Rc};
 
+/// The file path where the core service writes its connection address.
 #[cfg(target_family = "windows")]
 pub const CONNECTION_FILE_PATH: &'static str = r"C:\Users\Rudolf Vrbensky\comp-gate.txt";
 
+/// The file path where the core service writes its connection address (Unix fallback).
 #[cfg(target_family = "unix")]
 pub const CONNECTION_FILE_PATH: &'static str = "/tmp/comp-gate.txt";
 
+/// Represents the available commands in the IOAPI protocol.
+///
+/// Each variant corresponds to a specific action that can be requested from the core service.
 #[derive(Debug, Clone)]
 #[repr(u8)]
 pub enum IoApiCommand {
+    /// Request a list of all connected devices.
     GetDeviceList = 2,
+    /// Request to disable a specific device by its ID.
     DisableDevice(Rc<str>) = 3,
+    /// Request to enable a specific device by its ID.
     EnableDevice(Rc<str>) = 4,
+    /// Request the logs of device connection events.
     GetDeviceConnectionLogs = 5,
 }
 
 impl IoApiCommand {
+    /// Returns the numeric operation code associated with the command.
     fn cmd_code(&self) -> u8 {
         match self {
             Self::GetDeviceList => 2,
@@ -31,6 +49,23 @@ impl IoApiCommand {
 impl TryFrom<&[&str]> for IoApiCommand {
     type Error = ();
 
+    /// Tries to parse a command from a slice of string tokens.
+    ///
+    /// This is useful for parsing command-line arguments or text-based input.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use comp_gate::helper::ioapi::IoApiCommand;
+    /// use std::rc::Rc;
+    ///
+    /// let tokens = ["disable_device", "USB\\VID_1234&PID_5678"];
+    /// let cmd = IoApiCommand::try_from(&tokens[..]).unwrap();
+    ///
+    /// if let IoApiCommand::DisableDevice(id) = cmd {
+    ///     assert_eq!(id.as_ref(), "USB\\VID_1234&PID_5678");
+    /// }
+    /// ```
     fn try_from(cmd_tokens: &[&str]) -> Result<Self, Self::Error> {
         match cmd_tokens[0] {
             "get_device_list" => Ok(IoApiCommand::GetDeviceList),
@@ -45,6 +80,7 @@ impl TryFrom<&[&str]> for IoApiCommand {
 impl TryFrom<(u8, Vec<Rc<str>>)> for IoApiCommand {
     type Error = ();
 
+    /// Tries to reconstruct a command from a raw opcode and a list of arguments.
     fn try_from((code, args): (u8, Vec<Rc<str>>)) -> Result<Self, Self::Error> {
         match code {
             2 => Ok(IoApiCommand::GetDeviceList),
@@ -56,9 +92,15 @@ impl TryFrom<(u8, Vec<Rc<str>>)> for IoApiCommand {
     }
 }
 
+/// A serialized request ready to be sent over the network.
+///
+/// This struct wraps the raw byte representation of an `IoApiCommand`.
 pub struct IoApiRequest(Rc<[u8]>);
 
 impl From<IoApiCommand> for IoApiRequest {
+    /// Converts an `IoApiCommand` into a serialized `IoApiRequest`.
+    ///
+    /// The serialization format is generally `[opcode, payload...]`.
     fn from(value: IoApiCommand) -> Self {
         let cmd_code = value.cmd_code();
 
@@ -82,6 +124,15 @@ impl Deref for IoApiRequest {
     }
 }
 
+/// Retrieves the socket address of the running core service.
+///
+/// This function reads the connection file (defined by `CONNECTION_FILE_PATH`)
+/// to find the IP and port where the core service is listening.
+///
+/// # Returns
+///
+/// * `Ok(SocketAddr)` - The address of the core service.
+/// * `Err(anyhow::Error)` - If the file cannot be read or parsed.
 pub fn get_core_connection_addr() -> anyhow::Result<SocketAddr> {
     let addr_line: Box<str> = std::fs::read_to_string(CONNECTION_FILE_PATH)?
         .trim()

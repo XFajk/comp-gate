@@ -1,3 +1,14 @@
+//! # USB Connection Callback Module
+//!
+//! This module implements a mechanism to detect USB device insertion and removal events on Windows.
+//! It creates a hidden window to receive `WM_DEVICECHANGE` messages and broadcasts these events
+//! via a channel to the main application.
+//!
+//! Key components:
+//! - `UsbConnectionCallbacksHandle`: The main interface for setting up and polling events.
+//! - `UsbConnectionEvent`: Enum representing connection/disconnection events.
+//! - `window_proc`: The window procedure that processes Windows messages.
+
 use std::{
     ops::Deref,
     ptr::{null, null_mut},
@@ -23,9 +34,15 @@ use windows_sys::Win32::{
 
 use crate::error::{PollEventError, Win32Error};
 
+/// A global sender to transmit events from the window procedure (which is a static C-callback)
+/// to the Rust application logic.
 static EVENT_SENDER: LazyLock<Mutex<Option<Sender<UsbConnectionEvent>>>> =
     LazyLock::new(|| Mutex::new(None));
 
+/// Extracts the device path string from a `DEV_BROADCAST_DEVICEINTERFACE_W` structure.
+///
+/// # Safety
+/// This function assumes `dev_brodcast` is a valid pointer to a `DEV_BROADCAST_DEVICEINTERFACE_W` struct.
 fn get_device_path(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) -> String {
     unsafe {
         let dbcc_name_ptr = (*dev_brodcast).dbcc_name.as_ptr();
@@ -40,6 +57,9 @@ fn get_device_path(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) -> Stri
     }
 }
 
+/// Handles the `DBT_DEVICEARRIVAL` event.
+///
+/// Filters for USB and HID devices and sends a `Connected` event if the device matches.
 fn handle_device_arrival(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) {
     let dev_type = unsafe { (*dev_brodcast).dbcc_devicetype };
     if dev_type != DBT_DEVTYP_DEVICEINTERFACE {
@@ -48,6 +68,7 @@ fn handle_device_arrival(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) {
 
     let device_path_string = get_device_path(dev_brodcast).to_uppercase();
 
+    // Filter out devices that are not USB or HID
     let filter = !device_path_string.starts_with(r"\\?\USB#")
         && !device_path_string.starts_with(r"\\?\HID#");
 
@@ -67,6 +88,9 @@ fn handle_device_arrival(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) {
     }
 }
 
+/// Handles the `DBT_DEVICEREMOVECOMPLETE` event.
+///
+/// Filters for USB and HID devices and sends a `Disconnected` event if the device matches.
 fn handle_device_removal(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) {
     let dev_type = unsafe { (*dev_brodcast).dbcc_devicetype };
     if dev_type != DBT_DEVTYP_DEVICEINTERFACE {
@@ -94,6 +118,9 @@ fn handle_device_removal(dev_brodcast: *const DEV_BROADCAST_DEVICEINTERFACE_W) {
     }
 }
 
+/// The Windows Procedure function for the hidden window.
+///
+/// This function intercepts `WM_DEVICECHANGE` messages to detect device insertion/removal.
 extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_DEVICECHANGE => {
@@ -118,6 +145,9 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
     }
 }
 
+/// RAII wrapper for a Window Handle (HWND).
+///
+/// Ensures `DestroyWindow` is called when the handle goes out of scope.
 struct WindowHandle(HWND);
 
 impl Deref for WindowHandle {
@@ -138,6 +168,9 @@ impl Drop for WindowHandle {
     }
 }
 
+/// RAII wrapper for a Device Notification Handle (HDEVNOTIFY).
+///
+/// Ensures `UnregisterDeviceNotification` is called when the handle goes out of scope.
 struct NotificationHandle(HDEVNOTIFY);
 
 impl Deref for NotificationHandle {
@@ -158,6 +191,9 @@ impl Drop for NotificationHandle {
     }
 }
 
+/// RAII wrapper for a Window Class.
+///
+/// Ensures `UnregisterClassW` is called when the class goes out of scope.
 struct WindowClass(Rc<[u16]>);
 
 impl Deref for WindowClass {
@@ -177,18 +213,32 @@ impl Drop for WindowClass {
     }
 }
 
+/// Represents a USB connection event.
 pub enum UsbConnectionEvent {
+    /// A device was connected. Contains the device path.
     Connected(Arc<str>),
+    /// A device was disconnected. Contains the device path.
     Disconnected(Arc<str>),
 }
 
+/// Manages the background thread and resources for monitoring USB events.
 pub struct UsbConnectionCallbacksHandle {
     event_receiver: Receiver<UsbConnectionEvent>,
     thread_finish_receiver: Receiver<Result<(), Win32Error>>,
+    #[allow(dead_code)] // Kept alive to ensure the thread runs
     thread_handle: JoinHandle<Result<(), Win32Error>>,
 }
 
 impl UsbConnectionCallbacksHandle {
+    /// Sets up the background thread to listen for USB connection events.
+    ///
+    /// This function spawns a thread that creates a hidden message-only window
+    /// and registers for device notifications.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(UsbConnectionCallbacksHandle)` - Handle to manage the listener.
+    /// * `Err(anyhow::Error)` - If initialization fails.
     pub fn setup_connection_callbacks() -> anyhow::Result<Self> {
         let (event_sender, event_receiver) = std::sync::mpsc::channel::<UsbConnectionEvent>();
         let (thread_finish_sender, thread_finish_receiver) =
@@ -293,6 +343,15 @@ impl UsbConnectionCallbacksHandle {
         })
     }
 
+    /// Polls for new USB connection events.
+    ///
+    /// This function is non-blocking and should be called periodically in the main loop.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(UsbConnectionEvent)` - A new event (Connected/Disconnected).
+    /// * `Err(PollEventError::ThreadFinished)` - If the background thread has stopped.
+    /// * `Err(PollEventError::ThreadRecvError)` - If the channel is empty (no new events).
     pub fn poll_events(&self) -> Result<UsbConnectionEvent, PollEventError> {
         let thread_finished = self.thread_finish_receiver.try_recv();
         if thread_finished.is_ok() {

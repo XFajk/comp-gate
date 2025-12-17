@@ -1,5 +1,14 @@
-/// This file holds the functions related to device management
-/// such as listing connected devices, ejecting devices, etc.
+//! # Device Management Module
+//!
+//! This module provides the core functionality for interacting with the Windows SetupAPI
+//! to manage USB and HID devices. It allows for:
+//!
+//! - Enumerating connected devices.
+//! - Retrieving device properties (ID, Class, Description, etc.).
+//! - Organizing devices into a hierarchical tree structure based on parent-child relationships.
+//! - Enabling and disabling devices.
+//! - Tracking device insertion and removal at runtime.
+
 use crate::error::{DeviceInsertionError, DeviceStringPropertyError, Win32Error};
 
 use std::{
@@ -19,24 +28,40 @@ use windows_sys::Win32::{
     Foundation::*,
 };
 
+/// Represents the desired state of a device driver.
 #[repr(u32)]
 pub enum DeviceState {
+    /// Enable the device driver.
     Enable = DICS_ENABLE,
+    /// Disable the device driver.
     Disable = DICS_DISABLE,
 }
 
+/// Represents a property retrieved from a device.
+///
+/// This enum handles different types of properties that can be queried from the SetupAPI.
+/// Currently, it focuses on string properties but handles unsupported types gracefully.
 pub enum DeviceProperty {
+    /// Represents an empty or null property.
     EmptyProperty, // May not be used but is here so that the enum has more that one variant
+    /// Represents a string property (REG_SZ).
     StringProperty {
+        /// The string value of the property.
         data: String,
     },
+    /// Represents a property type that is not explicitly handled by this wrapper.
     UnsupportedProperty {
+        /// The raw byte data of the property.
         raw_data: Rc<[u8]>,
+        /// The Windows property type identifier.
         property_type: DEVPROPTYPE,
     },
 }
 
 impl From<(&[u8], DEVPROPTYPE)> for DeviceProperty {
+    /// Converts a raw byte slice and property type into a `DeviceProperty`.
+    ///
+    /// This function handles the parsing of raw bytes into Rust types based on the `DEVPROPTYPE`.
     fn from(value: (&[u8], DEVPROPTYPE)) -> Self {
         match value.1 & DEVPROP_MASK_TYPE {
             DEVPROP_TYPE_STRING => {
@@ -65,17 +90,31 @@ impl From<(&[u8], DEVPROPTYPE)> for DeviceProperty {
     }
 }
 
+/// Represents a physical or logical device on the system.
+///
+/// This struct holds metadata about the device and maintains a list of its child devices,
+/// forming a tree structure.
 pub struct Device {
+    /// Internal Windows handle data for the device.
     devinfo: SP_DEVINFO_DATA,
+    /// The unique Instance ID of the device (e.g., `USB\VID_XXXX&PID_XXXX\SN`).
     pub device_id: Rc<str>,
+    /// The Instance ID of the parent device, if any.
     pub parent_id: Option<Rc<str>>,
+    /// The depth of this device in the device tree (0 for root).
     pub tree_level: u32,
+    /// A collection of child devices attached to this device.
     pub devices: HashMap<Rc<str>, Device>,
 
+    /// The name of the service driving the device.
     pub device_service: Option<Rc<str>>,
+    /// The device setup class (e.g., "USB", "HIDClass").
     pub device_class: Option<Rc<str>>,
+    /// The friendly name of the device as seen in Device Manager.
     pub device_friendly_name: Option<Rc<str>>,
+    /// The device type identifier.
     pub device_type: Option<Rc<str>>,
+    /// The description of the device.
     pub device_description: Option<Rc<str>>,
 }
 
@@ -130,6 +169,14 @@ impl std::fmt::Display for Device {
 }
 
 impl Device {
+    /// Creates a `Device` struct from raw Windows `SP_DEVINFO_DATA`.
+    ///
+    /// This function queries the SetupAPI to populate the device's properties.
+    ///
+    /// # Arguments
+    ///
+    /// * `devinfo` - The device information data structure.
+    /// * `devinfoset` - The handle to the device information set containing `devinfo`.
     fn from_bare_devinfo(
         devinfo: SP_DEVINFO_DATA,
         devinfoset: HDEVINFO,
@@ -223,6 +270,7 @@ impl Device {
         })
     }
 
+    /// Retrieves the Device Instance ID string.
     fn retrieve_device_id(
         devinfo: SP_DEVINFO_DATA,
         devinfoset: HDEVINFO,
@@ -267,6 +315,7 @@ impl Device {
         }
     }
 
+    /// Retrieves a raw property from the device.
     fn retrieve_device_property(
         devinfo: SP_DEVINFO_DATA,
         devinfoset: HDEVINFO,
@@ -312,6 +361,10 @@ impl Device {
         }
     }
 
+    /// Retrieves a specific string property from the device.
+    ///
+    /// # Safety
+    /// This function is unsafe because it calls `retrieve_device_property` which interacts with raw pointers via FFI.
     unsafe fn retrieve_string_property(
         devinfo: SP_DEVINFO_DATA,
         devinfoset: HDEVINFO,
@@ -327,6 +380,14 @@ impl Device {
         Ok(device_property)
     }
 
+    /// Changes the state of the device (Enable/Disable).
+    ///
+    /// This function uses `SetupDiSetClassInstallParams` and `SetupDiCallClassInstaller` to modify the device state.
+    ///
+    /// # Arguments
+    ///
+    /// * `new_state` - The target state (`Enable` or `Disable`).
+    /// * `information_set` - The handle to the device information set.
     fn change_state(
         &self,
         new_state: DeviceState,
@@ -371,8 +432,14 @@ impl Device {
     }
 }
 
+/// Manages a collection of devices and the underlying Windows Device Information Set.
+///
+/// This struct is the main entry point for querying and manipulating devices. It holds
+/// the `HDEVINFO` handle required for most SetupAPI calls.
 pub struct DeviceTracker {
+    /// Handle to the device information set.
     device_information_set: HDEVINFO,
+    /// A map of root-level devices managed by this tracker.
     pub devices: HashMap<Rc<str>, Device>,
 }
 
@@ -397,6 +464,14 @@ impl Drop for DeviceTracker {
 }
 
 impl DeviceTracker {
+    /// Sets the state (Enable/Disable) of a specific device by its ID.
+    ///
+    /// This function searches the entire device tree for the specified ID.
+    ///
+    /// # Arguments
+    ///
+    /// * `device_id` - The Instance ID of the device to modify.
+    /// * `state` - The desired state.
     pub fn set_device_state(&self, device_id: &str, state: DeviceState) -> Result<(), Win32Error> {
         fn find_device_in_tree<'a>(
             devices: &'a HashMap<Rc<str>, Device>,
@@ -422,6 +497,14 @@ impl DeviceTracker {
         }
     }
 
+    /// Inserts a new device into the tracker by its ID.
+    ///
+    /// This is typically called when a new device is detected via a system event.
+    /// It adds the device to the internal `HDEVINFO` set and places it in the device tree.
+    ///
+    /// # Arguments
+    ///
+    /// * `device_id` - The Instance ID of the new device.
     pub fn insert_device_by_id(&mut self, device_id: &str) -> Result<(), DeviceInsertionError> {
         let device_info =
             Self::add_device_to_device_information_set(self.device_information_set, device_id)?;
@@ -451,6 +534,10 @@ impl DeviceTracker {
         Ok(())
     }
 
+    /// Internal helper to place a new device into the correct position in the tree.
+    ///
+    /// It handles finding the parent device and also checks if the new device
+    /// should become the parent of any existing "orphan" devices.
     fn insert_deivice_into_tree(&mut self, new_device: Device) {
         let new_device_id = new_device.device_id.clone();
 
@@ -506,6 +593,13 @@ impl DeviceTracker {
         }
     }
 
+    /// Removes a device from the tracker by its ID.
+    ///
+    /// This removes the device from the tree and deletes it from the `HDEVINFO` set.
+    ///
+    /// # Arguments
+    ///
+    /// * `device_id` - The Instance ID of the device to remove.
     pub fn remove_device_by_id(&mut self, device_id: &str) -> Option<Win32Error> {
         fn find_and_remove_device(
             devices: &mut HashMap<Rc<str>, Device>,
@@ -542,8 +636,8 @@ impl DeviceTracker {
     }
 }
 
-// this separate impl block is to only visually separate associated functions
 impl DeviceTracker {
+    /// Helper to get a handle to devices of a specific class.
     fn get_class_devs(class_name: *const u8) -> Result<HDEVINFO, Win32Error> {
         let devinfo_set: HDEVINFO = unsafe {
             SetupDiGetClassDevsA(
@@ -561,6 +655,9 @@ impl DeviceTracker {
         Ok(devinfo_set)
     }
 
+    /// Loads all currently connected USB and HID devices into a new `DeviceTracker`.
+    ///
+    /// This is the primary factory method for creating a `DeviceTracker`.
     pub fn load() -> Result<Self, Win32Error> {
         let usb_device_information_set = Self::get_class_devs(c"USB".as_ptr() as *const u8)?;
         let hid_device_information_set = Self::get_class_devs(c"HID".as_ptr() as *const u8)?;
@@ -571,6 +668,7 @@ impl DeviceTracker {
         ])
     }
 
+    /// Enumerates all devices in a given `HDEVINFO` set.
     fn get_listed_devices(devinfoset: HDEVINFO) -> Result<HashMap<Rc<str>, Device>, Win32Error> {
         let mut devices: HashMap<Rc<str>, Device> = HashMap::new();
         let mut index: u32 = 0;
@@ -610,6 +708,7 @@ impl DeviceTracker {
         Ok(convert_devices_into_tree(devices))
     }
 
+    /// Merges multiple `HDEVINFO` sets into a single `DeviceTracker`.
     fn merge_device_information_sets(sets: &[HDEVINFO]) -> Result<Self, Win32Error> {
         let merged_set = unsafe { SetupDiCreateDeviceInfoList(null(), null_mut()) };
         let mut merged_devices = HashMap::new();
@@ -628,6 +727,7 @@ impl DeviceTracker {
         })
     }
 
+    /// Adds a single device to an existing `HDEVINFO` set.
     fn add_device_to_device_information_set(
         device_information_set: HDEVINFO,
         device_id: &str,
@@ -742,11 +842,15 @@ impl DeviceTracker {
     }
 }
 
+/// An iterator over all devices in a `DeviceTracker`.
+///
+/// This iterator performs a depth-first traversal of the device tree.
 pub struct DeviceIterator<'a> {
     stack: Vec<&'a Device>,
 }
 
 impl<'a> DeviceIterator<'a> {
+    /// Creates a new iterator from a map of devices.
     pub fn new(devices: &'a HashMap<Rc<str>, Device>) -> Self {
         let stack = devices.values().collect();
 
@@ -774,11 +878,13 @@ impl<'a> Iterator for DeviceIterator<'a> {
 }
 
 impl DeviceTracker {
+    /// Returns an iterator over all devices tracked by this instance.
     pub fn iter<'a>(&'a self) -> DeviceIterator<'a> {
         DeviceIterator::new(&self.devices)
     }
 }
 
+/// Filters out devices that should not be tracked (e.g., USB hubs).
 fn device_filter_function(device: &Device) -> bool {
     if let Some(service) = &device.device_service {
         service.as_ref() == "usbhub3" || service.as_ref() == "usbhub"
@@ -787,6 +893,7 @@ fn device_filter_function(device: &Device) -> bool {
     }
 }
 
+/// Converts a flat map of devices into a hierarchical tree.
 fn convert_devices_into_tree(mut devices: HashMap<Rc<str>, Device>) -> HashMap<Rc<str>, Device> {
     let device_ids: Vec<Rc<str>> = devices.keys().cloned().collect();
     let parent_ids: Vec<(Rc<str>, Rc<str>)> = devices
@@ -807,6 +914,7 @@ fn convert_devices_into_tree(mut devices: HashMap<Rc<str>, Device>) -> HashMap<R
     devices
 }
 
+/// Recursive helper to move a child device into its parent's `devices` map.
 fn place_child_in_parent(
     parent_id: &Rc<str>,
     child_id: &Rc<str>,
@@ -837,9 +945,12 @@ fn place_child_in_parent(
     }
 }
 
-/// Extract device instance ID from device interface path
-/// Input:  \\?\USB#VID_046D&PID_C52B#5&2752457f&0&2#{a5dcbf10-6530-11d2-901f-00c04fb951ed}
-/// Output: USB\VID_046D&PID_C52B\5&2752457f&0&2
+/// Extract device instance ID from device interface path.
+///
+/// # Example
+///
+/// Input:  `\\?\USB#VID_046D&PID_C52B#5&2752457f&0&2#{a5dcbf10-6530-11d2-901f-00c04fb951ed}`
+/// Output: `USB\VID_046D&PID_C52B\5&2752457f&0&2`
 pub fn device_path_to_device_id(device_path: &str) -> Rc<str> {
     // Remove \\?\ prefix
     let path = device_path.strip_prefix(r"\\?\").unwrap_or(device_path);

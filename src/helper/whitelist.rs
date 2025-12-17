@@ -1,16 +1,43 @@
+//! # Whitelist Module
+//!
+//! This module manages the list of authorized USB devices.
+//! It uses the system keyring to securely store the whitelist of device IDs.
+//!
+//! The `Whitelist` struct provides methods to:
+//! - Initialize the whitelist from currently connected devices.
+//! - Apply the whitelist (disable unauthorized devices).
+//! - Add or remove devices from the whitelist.
+//! - Persist the whitelist state.
+
 use keyring::Entry;
 use std::{collections::HashSet, rc::Rc, str};
 
 use crate::helper::device_managment::DeviceTracker;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
+/// Manages the authorized device list and enforces it on the system.
 pub struct Whitelist {
+    /// The keyring entry used for secure storage.
     entry: Entry,
 
+    /// The tracker used to interact with system devices.
     pub device_tracker: DeviceTracker,
 }
 
 impl Whitelist {
+    /// Creates a new `Whitelist` instance.
+    ///
+    /// This initializes the keyring entry and, if creating for the first time,
+    /// might populate it with the currently connected devices (based on the implementation logic).
+    ///
+    /// # Arguments
+    ///
+    /// * `device_tracker` - An initialized `DeviceTracker` containing current system devices.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Whitelist)` - The initialized whitelist manager.
+    /// * `Err(anyhow::Error)` - If keyring access fails.
     pub fn new(device_tracker: DeviceTracker) -> anyhow::Result<Self> {
         let entry = Entry::new("comp-gate.xfajk", "device_whitelist")?;
 
@@ -31,20 +58,38 @@ impl Whitelist {
         Ok(whitelist)
     }
 
+    /// Enforces the whitelist on the system.
+    ///
+    /// Iterates through all connected devices. If a device ID is not found in the
+    /// stored whitelist, it is disabled. If it is found, it is enabled.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If all operations succeed.
+    /// * `Err(anyhow::Error)` - If loading the whitelist or changing device state fails.
     pub fn apply_whitelist(&mut self) -> anyhow::Result<()> {
         let whitelist_entries = self.load_whitelist()?;
 
         for d in self.device_tracker.iter() {
             if !whitelist_entries.contains(&d.device_id) {
-                self.device_tracker.set_device_state(&d.device_id, super::device_managment::DeviceState::Disable)?;
+                self.device_tracker.set_device_state(
+                    &d.device_id,
+                    super::device_managment::DeviceState::Disable,
+                )?;
             } else {
-                self.device_tracker.set_device_state(&d.device_id, super::device_managment::DeviceState::Enable)?;
+                self.device_tracker
+                    .set_device_state(&d.device_id, super::device_managment::DeviceState::Enable)?;
             }
         }
 
         Ok(())
     }
 
+    /// Adds a device ID to the authorized list.
+    ///
+    /// # Arguments
+    ///
+    /// * `device_id` - The Instance ID of the device to authorize.
     pub fn whitelist_device(&mut self, device_id: &str) -> anyhow::Result<()> {
         let mut whitelist_entries = self.load_whitelist()?;
         let rc_id = device_id.into();
@@ -56,6 +101,13 @@ impl Whitelist {
         Ok(())
     }
 
+    /// Removes a device ID from the authorized list.
+    ///
+    /// Note: This does not immediately disable the device; `apply_whitelist` must be called.
+    ///
+    /// # Arguments
+    ///
+    /// * `device_id` - The Instance ID of the device to de-authorize.
     pub fn blacklist_device(&mut self, device_id: &str) -> anyhow::Result<()> {
         let mut whitelist_entries = self.load_whitelist()?;
         let rc_id: Rc<str> = device_id.into();
@@ -67,7 +119,12 @@ impl Whitelist {
         Ok(())
     }
 
-    /// Read the stored whitelist from the entry and return a HashSet<Rc<str>>.
+    /// Loads the whitelist from the system keyring.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(HashSet<Rc<str>>)` - The set of authorized device IDs.
+    /// * `Err(anyhow::Error)` - If the keyring cannot be accessed or data is corrupt.
     pub fn load_whitelist(&self) -> Result<HashSet<Rc<str>>> {
         let hex = match self.entry.get_password() {
             Ok(s) => s,
@@ -79,6 +136,11 @@ impl Whitelist {
         Ok(set)
     }
 
+    /// Saves the whitelist to the system keyring.
+    ///
+    /// # Arguments
+    ///
+    /// * `set` - The set of device IDs to store.
     pub fn store_whitelist(&self, set: &HashSet<Rc<str>>) -> Result<()> {
         let bytes = serialize_set_bytes(set);
         let hex = encode_hex(&bytes);
@@ -106,14 +168,18 @@ fn deserialize_set_bytes(bytes: &[u8]) -> Result<HashSet<Rc<str>>> {
     let mut i = 0usize;
     while i < bytes.len() {
         if i + 8 > bytes.len() {
-            return Err(anyhow!("corrupt whitelist data: unexpected EOF reading length"));
+            return Err(anyhow!(
+                "corrupt whitelist data: unexpected EOF reading length"
+            ));
         }
         let mut len_bytes = [0u8; 8];
         len_bytes.copy_from_slice(&bytes[i..i + 8]);
         let len = u64::from_le_bytes(len_bytes) as usize;
         i += 8;
         if i + len > bytes.len() {
-            return Err(anyhow!("corrupt whitelist data: unexpected EOF reading string"));
+            return Err(anyhow!(
+                "corrupt whitelist data: unexpected EOF reading string"
+            ));
         }
         let slice = &bytes[i..i + len];
         let s = str::from_utf8(slice)

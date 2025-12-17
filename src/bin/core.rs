@@ -1,3 +1,24 @@
+//! # Core Service Binary
+//!
+//! This binary acts as the central daemon for the `comp-gate` system.
+//! It is responsible for:
+//!
+//! - **Device Monitoring**: Continuously listening for USB device insertion and removal events.
+//! - **Device Management**: Maintaining an in-memory tree of connected devices (`DeviceTracker`).
+//! - **Access Control**: Enforcing a whitelist policy to automatically disable unauthorized devices (WIP).
+//! - **Inter-Process Communication (IPC)**: Hosting a TCP server (IOAPI) to allow external tools (like the CLI or GUI shell) to query device status and issue commands.
+//!
+//! ## Architecture
+//!
+//! The core service runs a single-threaded event loop that polls for two types of events:
+//! 1. **Network Events**: New TCP connections or incoming data on existing connections.
+//! 2. **System Events**: USB hardware changes detected by the `UsbConnectionCallbacksHandle`.
+//!
+//! ## Usage
+//!
+//! This binary is intended to be run as a background service (daemon) with administrative privileges,
+//! as it requires access to the Windows SetupAPI to enable/disable drivers.
+
 use std::{
     io::{Read, Write},
     net::{Ipv4Addr, TcpListener, TcpStream},
@@ -23,6 +44,16 @@ use helper::{
 // - [_] Combine last three points into a Whitelist/Blacklist system
 // - [_] Implement GUI using egui around the core functionality
 
+/// The main entry point for the Core service.
+///
+/// It performs the following initialization steps:
+/// 1. Binds a TCP listener to a random local port for the IOAPI.
+/// 2. Writes the connection address to a known file path so clients can find it.
+/// 3. Loads the initial state of connected USB/HID devices.
+/// 4. Initializes the whitelist system.
+/// 5. Starts the background thread for USB event monitoring.
+///
+/// Then it enters the main event loop.
 fn main() -> Result<()> {
     // IO API stuff
     let ioapi_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
@@ -131,13 +162,6 @@ fn main() -> Result<()> {
                                     println!("Error writing to IO API connection: {}", err);
                                 });
                         }
-                        _ => {
-                            let payload = convert_bytes_to_payload(b"Unknown command");
-
-                            connection.write_all(&payload).unwrap_or_else(|err| {
-                                println!("Error writing to IO API connection: {}", err);
-                            });
-                        }
                     }
                 }
                 Err(e) if e.kind() != std::io::ErrorKind::WouldBlock => {
@@ -208,6 +232,15 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Accepts new incoming TCP connections on the IOAPI listener.
+///
+/// This function is non-blocking. It accepts all currently pending connections
+/// and adds them to the `connections` vector.
+///
+/// # Arguments
+///
+/// * `listener` - The bound TCP listener.
+/// * `connections` - The vector to store active connections.
 fn handle_new_ioapi_connection(listener: &TcpListener, connections: &mut Vec<TcpStream>) {
     loop {
         match listener.accept() {
@@ -226,6 +259,17 @@ fn handle_new_ioapi_connection(listener: &TcpListener, connections: &mut Vec<Tcp
     }
 }
 
+/// Parses a raw byte message from a TCP stream into an `IoApiCommand`.
+///
+/// # Arguments
+///
+/// * `connection` - The TCP stream to read from.
+/// * `message_length` - The expected length of the message payload.
+///
+/// # Returns
+///
+/// * `Some(IoApiCommand)` - If parsing is successful.
+/// * `None` - If reading fails or the command is invalid.
 fn parse_cmd_message(connection: &mut TcpStream, message_length: usize) -> Option<IoApiCommand> {
     let mut message_buf = vec![0u8; message_length];
     // TODO WARING: logical BUG if the read_exact return would block this code bugs out everything
@@ -236,12 +280,15 @@ fn parse_cmd_message(connection: &mut TcpStream, message_length: usize) -> Optio
             let args_data = &message_buf[1..];
             let args_str = String::from_utf8_lossy(args_data);
             let arguments: Vec<Rc<str>> = args_str.split(" ").map(Rc::from).collect();
-            return Some(IoApiCommand::from((command_code, arguments)));
+            return IoApiCommand::try_from((command_code, arguments)).ok();
         }
     }
     None
 }
 
+/// Helper function to wrap a byte slice into a length-prefixed payload.
+///
+/// The format is `[4 bytes length (Big Endian)][payload]`.
 fn convert_bytes_to_payload(bytes: &[u8]) -> Box<[u8]> {
     let length_prefix = (bytes.len() as u32).to_be_bytes();
     [&length_prefix, bytes].concat().into_boxed_slice()

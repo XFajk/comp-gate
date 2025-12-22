@@ -5,7 +5,7 @@
 //! specific error types for device polling, insertion, and property retrieval operations.
 
 use thiserror::Error;
-use windows_sys::Win32::Foundation::*;
+use windows_sys::Win32::{Devices::DeviceAndDriverInstallation::CR_SUCCESS, Foundation::*};
 
 /// Represents various Windows System Error codes encountered during API calls.
 ///
@@ -90,6 +90,10 @@ pub enum Win32Error {
     #[error("Device does not exist")]
     DeviceNotExist,
 
+    /// Config manager error (ERROR_CONFIG_MANAGER_ERROR).
+    #[error("Config manager error")]
+    ConfigManagerError(#[from] ConfigManagerError),
+
     /// An unknown error code not explicitly mapped in this enum.
     #[error("Unknown error with code: {0}")]
     UnknownError(u32),
@@ -134,6 +138,28 @@ impl From<u32> for Win32Error {
             ERROR_ALREADY_EXISTS => Win32Error::AlreadyExists, // ERROR_ALREADY_EXISTS
             ERROR_DEV_NOT_EXIST => Win32Error::DeviceNotExist, // ERROR_DEV_NOT_EXIST
             _ => Win32Error::UnknownError(code),
+        }
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum ConfigManagerError {
+    #[error("Config manager success")]
+    Success,
+
+    #[error("Config manager instance device instance")]
+    InvalidDeviceInstance,
+
+    /// Config manager error (ERROR_CONFIG_MANAGER_ERROR).
+    #[error("Config manager error {0}")]
+    UnknownError(u32),
+}
+
+impl From<u32> for ConfigManagerError {
+    fn from(code: u32) -> Self {
+        match code {
+            CR_SUCCESS => ConfigManagerError::Success,
+            _ => ConfigManagerError::UnknownError(code),
         }
     }
 }

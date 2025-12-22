@@ -9,10 +9,13 @@
 //! - Enabling and disabling devices.
 //! - Tracking device insertion and removal at runtime.
 
-use crate::error::{DeviceInsertionError, DeviceStringPropertyError, Win32Error};
+use crate::error::{
+    ConfigManagerError, DeviceInsertionError, DeviceStringPropertyError, Win32Error,
+};
 
 use std::{
     collections::HashMap,
+    ops::Deref,
     ptr::{null, null_mut},
     rc::Rc,
 };
@@ -28,6 +31,193 @@ use windows_sys::Win32::{
     Foundation::*,
 };
 
+pub struct DeviceInstance(u32);
+
+impl Deref for DeviceInstance {
+    type Target = u32;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl TryFrom<u32> for DeviceInstance {
+    type Error = ConfigManagerError;
+
+    fn try_from(raw_devinst: u32) -> Result<Self, Self::Error> {
+        let devinst = DeviceInstance(raw_devinst);
+        if !devinst.is_device_instance_valid() {
+            return Err(ConfigManagerError::InvalidDeviceInstance);
+        }
+
+        Ok(devinst)
+    }
+}
+
+impl TryFrom<&str> for DeviceInstance {
+    type Error = ConfigManagerError;
+
+    fn try_from(id: &str) -> Result<Self, Self::Error> {
+        let device_id_wide: Vec<u16> = id.encode_utf16().chain(std::iter::once(0)).collect();
+
+        let mut devinst: u32 = 0;
+        let result = unsafe {
+            CM_Locate_DevNodeW(
+                &mut devinst,
+                device_id_wide.as_ptr(),
+                CM_LOCATE_DEVNODE_NORMAL,
+            )
+        };
+
+        if result != CR_SUCCESS {
+            return Err(ConfigManagerError::from(result));
+        }
+
+        Ok(DeviceInstance(devinst))
+    }
+}
+
+impl DeviceInstance {
+    /// Retrieves the Device Instance ID string.
+    fn retrieve_device_id(&self) -> Result<Rc<str>, Win32Error> {
+        if !self.is_device_instance_valid() {
+            return Err(Win32Error::InvalidParameter);
+        }
+
+        let mut buffer: Vec<u16> = vec![0; 512];
+        let mut buffer_size = buffer.len() as u32;
+
+        // SAFETY: This call is safe because we are passing a valid pointer to a mutable buffer
+        //  and valid device instance.
+        let call_result = unsafe { CM_Get_Device_ID_Size(&mut buffer_size as *mut _, **self, 0) };
+        if call_result != CR_SUCCESS {
+            return Err(ConfigManagerError::from(call_result).into());
+        }
+
+        buffer_size += 1;
+        buffer.resize(buffer_size as usize, 0);
+
+        // First call to get the required size
+
+        let call_result = unsafe { CM_Get_Device_IDW(**self, buffer.as_mut_ptr(), buffer_size, 0) };
+        if call_result != CR_SUCCESS {
+            return Err(ConfigManagerError::from(call_result).into());
+        }
+
+        let len = if buffer_size == 0 {
+            buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len())
+        } else {
+            (buffer_size as usize).saturating_sub(1)
+        };
+        let device_instance_id: Rc<str> = String::from_utf16_lossy(&buffer[..len])
+            .to_uppercase()
+            .into();
+        Ok(device_instance_id)
+    }
+
+    /// Retrieves a raw property from the device.
+    fn retrieve_device_property(
+        &self,
+        property: &DEVPROPKEY,
+    ) -> Result<(Vec<u8>, DEVPROPTYPE), Win32Error> {
+        if !self.is_device_instance_valid() {
+            return Err(Win32Error::InvalidParameter);
+        }
+
+        let mut buffer: Vec<u8> = vec![];
+        let mut required_size: u32 = 0;
+        let mut property_type: DEVPROPTYPE = 0;
+
+        // First call to get the required size
+        // SAFETY: We are passing a valid device instance and property key.
+        let call_result = unsafe {
+            CM_Get_DevNode_PropertyW(
+                **self,
+                property as *const _,
+                &mut property_type as *mut DEVPROPTYPE,
+                null_mut(),
+                &mut required_size as *mut _,
+                0,
+            )
+        };
+        if call_result != CR_SUCCESS {
+            return Err(ConfigManagerError::from(call_result).into());
+        }
+
+        buffer.resize(required_size as usize, 0u8);
+
+        // SAFETY: We are passing a valid device instance, property key, and buffer.
+        let call_result = unsafe {
+            CM_Get_DevNode_PropertyW(
+                **self,
+                property as *const _,
+                &mut property_type as *mut DEVPROPTYPE,
+                buffer.as_mut_ptr(),
+                &mut required_size as *mut u32,
+                0,
+            )
+        };
+        if call_result != CR_SUCCESS {
+            return Err(ConfigManagerError::from(call_result).into());
+        }
+
+        Ok((buffer.into(), property_type))
+    }
+
+    /// Retrieves a specific string property from the device.
+    fn retrieve_string_property(
+        &self,
+        property: &DEVPROPKEY,
+    ) -> Result<Rc<str>, DeviceStringPropertyError> {
+        let device_property = self.retrieve_device_property(property)?;
+        let device_property =
+            DeviceProperty::from((device_property.0.as_slice(), device_property.1));
+        let device_property = match device_property {
+            DeviceProperty::StringProperty { data } => Rc::from(data),
+            _ => return Err(DeviceStringPropertyError::PropertyNotString),
+        };
+        Ok(device_property)
+    }
+
+    fn is_device_instance_valid(&self) -> bool {
+        let mut status = 0;
+        let mut problem_number = 0u32;
+
+        let call_result = unsafe {
+            CM_Get_DevNode_Status(
+                &mut status as *mut _,
+                &mut problem_number as *mut _,
+                **self,
+                0,
+            )
+        };
+        call_result == CR_SUCCESS && status & DN_HAS_PROBLEM == 0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DeviceId(Rc<str>);
+
+impl std::fmt::Display for DeviceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Deref for DeviceId {
+    type Target = Rc<str>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<Rc<str>> for DeviceId {
+    fn from(id: Rc<str>) -> Self {
+        DeviceId(id)
+    }
+}
+
 /// Represents the desired state of a device driver.
 #[repr(u32)]
 pub enum DeviceState {
@@ -42,8 +232,7 @@ pub enum DeviceState {
 /// This enum handles different types of properties that can be queried from the SetupAPI.
 /// Currently, it focuses on string properties but handles unsupported types gracefully.
 pub enum DeviceProperty {
-    /// Represents an empty or null property.
-    EmptyProperty, // May not be used but is here so that the enum has more that one variant
+    EmptyProperty,
     /// Represents a string property (REG_SZ).
     StringProperty {
         /// The string value of the property.
@@ -96,15 +285,15 @@ impl From<(&[u8], DEVPROPTYPE)> for DeviceProperty {
 /// forming a tree structure.
 pub struct Device {
     /// Internal Windows handle data for the device.
-    devinfo: SP_DEVINFO_DATA,
+    devinst: DeviceInstance,
     /// The unique Instance ID of the device (e.g., `USB\VID_XXXX&PID_XXXX\SN`).
-    pub device_id: Rc<str>,
+    pub device_id: DeviceId,
     /// The Instance ID of the parent device, if any.
-    pub parent_id: Option<Rc<str>>,
+    pub parent_id: Option<DeviceId>,
     /// The depth of this device in the device tree (0 for root).
     pub tree_level: u32,
     /// A collection of child devices attached to this device.
-    pub devices: HashMap<Rc<str>, Device>,
+    pub devices: HashMap<DeviceId, Device>,
 
     /// The name of the service driving the device.
     pub device_service: Option<Rc<str>>,
@@ -168,31 +357,18 @@ impl std::fmt::Display for Device {
     }
 }
 
-impl Device {
-    /// Creates a `Device` struct from raw Windows `SP_DEVINFO_DATA`.
-    ///
-    /// This function queries the SetupAPI to populate the device's properties.
-    ///
-    /// # Arguments
-    ///
-    /// * `devinfo` - The device information data structure.
-    /// * `devinfoset` - The handle to the device information set containing `devinfo`.
-    fn from_bare_devinfo(
-        devinfo: SP_DEVINFO_DATA,
-        devinfoset: HDEVINFO,
-    ) -> Result<Self, Win32Error> {
-        let device_id = Self::retrieve_device_id(devinfo, devinfoset)?;
+impl TryFrom<DeviceInstance> for Device {
+    type Error = Win32Error;
 
-        let parent_id = match unsafe {
-            Self::retrieve_string_property(devinfo, devinfoset, &DEVPKEY_Device_Parent)
-        } {
-            Ok(prop) => Some(prop.to_uppercase().into()),
+    fn try_from(devinst: DeviceInstance) -> Result<Self, Self::Error> {
+        let device_id = devinst.retrieve_device_id()?.into();
+
+        let parent_id = match devinst.retrieve_string_property(&DEVPKEY_Device_Parent) {
+            Ok(prop) => Some(DeviceId::from(Rc::from(prop.to_uppercase()))),
             Err(_) => None,
         };
 
-        let device_service = match unsafe {
-            Self::retrieve_string_property(devinfo, devinfoset, &DEVPKEY_Device_Service)
-        } {
+        let device_service = match devinst.retrieve_string_property(&DEVPKEY_Device_Service) {
             Ok(prop) => Some(prop.to_lowercase().into()),
             Err(e) => {
                 println!(
@@ -203,9 +379,7 @@ impl Device {
             }
         };
 
-        let device_class = match unsafe {
-            Self::retrieve_string_property(devinfo, devinfoset, &DEVPKEY_Device_Class)
-        } {
+        let device_class = match devinst.retrieve_string_property(&DEVPKEY_Device_Class) {
             Ok(prop) => Some(prop),
             Err(e) => {
                 println!(
@@ -216,9 +390,7 @@ impl Device {
             }
         };
 
-        let device_type = match unsafe {
-            Self::retrieve_string_property(devinfo, devinfoset, &DEVPKEY_Device_DevType)
-        } {
+        let device_type = match devinst.retrieve_string_property(&DEVPKEY_Device_DevType) {
             Ok(prop) => Some(prop),
             Err(e) => {
                 println!(
@@ -229,35 +401,33 @@ impl Device {
             }
         };
 
-        let device_description = unsafe {
-            match Self::retrieve_string_property(devinfo, devinfoset, &DEVPKEY_Device_DeviceDesc) {
-                Ok(prop) => Some(prop),
-                Err(e) => {
-                    println!(
-                        "Warning: Could not retrieve Device Description for Device ID {} because of an error: {:?}",
-                        device_id, e
-                    );
-                    None
-                }
+        let device_description = match devinst.retrieve_string_property(&DEVPKEY_Device_DeviceDesc)
+        {
+            Ok(prop) => Some(prop),
+            Err(e) => {
+                println!(
+                    "Warning: Could not retrieve Device Description for Device ID {} because of an error: {:?}",
+                    device_id, e
+                );
+                None
             }
         };
 
-        let device_friendly_name = unsafe {
-            match Self::retrieve_string_property(devinfo, devinfoset, &DEVPKEY_Device_FriendlyName)
-            {
-                Ok(prop) => Some(prop),
-                Err(e) => {
-                    println!(
-                        "Warning: Could not retrieve Device Friendly Name for Device ID {} because of an error: {:?}",
-                        device_id, e
-                    );
-                    None
-                }
+        let device_friendly_name = match devinst
+            .retrieve_string_property(&DEVPKEY_Device_FriendlyName)
+        {
+            Ok(prop) => Some(prop),
+            Err(e) => {
+                println!(
+                    "Warning: Could not retrieve Device Friendly Name for Device ID {} because of an error: {:?}",
+                    device_id, e
+                );
+                None
             }
         };
 
         Ok(Device {
-            devinfo,
+            devinst,
             device_id,
             parent_id,
             tree_level: 0,
@@ -269,117 +439,9 @@ impl Device {
             device_description,
         })
     }
+}
 
-    /// Retrieves the Device Instance ID string.
-    fn retrieve_device_id(
-        devinfo: SP_DEVINFO_DATA,
-        devinfoset: HDEVINFO,
-    ) -> Result<Rc<str>, Win32Error> {
-        let mut buffer: Vec<u16> = vec![];
-        let mut required_size: u32 = 0;
-
-        // First call to get the required size
-        unsafe {
-            SetupDiGetDeviceInstanceIdW(
-                devinfoset,
-                &devinfo as *const SP_DEVINFO_DATA,
-                null_mut(),
-                0u32,
-                &mut required_size as *mut u32,
-            );
-        }
-
-        buffer.resize(required_size as usize, 0u16);
-        let get_id_operation_result = unsafe {
-            SetupDiGetDeviceInstanceIdW(
-                devinfoset,
-                &devinfo as *const SP_DEVINFO_DATA,
-                buffer.as_mut_ptr(),
-                buffer.len() as u32,
-                &mut required_size as *mut u32,
-            )
-        } == TRUE;
-
-        if !get_id_operation_result {
-            Err(unsafe { GetLastError().into() })
-        } else {
-            let len = if required_size == 0 {
-                buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len())
-            } else {
-                (required_size as usize).saturating_sub(1)
-            };
-            let device_instance_id: Rc<str> = String::from_utf16_lossy(&buffer[..len])
-                .to_uppercase()
-                .into();
-            Ok(device_instance_id)
-        }
-    }
-
-    /// Retrieves a raw property from the device.
-    fn retrieve_device_property(
-        devinfo: SP_DEVINFO_DATA,
-        devinfoset: HDEVINFO,
-        property: &DEVPROPKEY,
-    ) -> Result<(Vec<u8>, DEVPROPTYPE), Win32Error> {
-        let mut buffer: Vec<u8> = vec![];
-        let mut required_size: u32 = 0;
-        let mut property_type: DEVPROPTYPE = 0;
-
-        // First call to get the required size
-        unsafe {
-            SetupDiGetDevicePropertyW(
-                devinfoset,
-                &devinfo as *const SP_DEVINFO_DATA,
-                property as *const _,
-                &mut property_type as *mut DEVPROPTYPE,
-                null_mut(),
-                0,
-                &mut required_size as *mut u32,
-                0,
-            );
-        }
-
-        buffer.resize(required_size as usize, 0u8);
-
-        let get_type_operation_result = unsafe {
-            SetupDiGetDevicePropertyW(
-                devinfoset,
-                &devinfo as *const SP_DEVINFO_DATA,
-                property as *const _,
-                &mut property_type as *mut DEVPROPTYPE,
-                buffer.as_mut_ptr(),
-                buffer.len() as u32,
-                &mut required_size as *mut u32,
-                0,
-            )
-        } == TRUE;
-
-        if !get_type_operation_result {
-            Err(unsafe { GetLastError().into() })
-        } else {
-            Ok((buffer.into(), property_type))
-        }
-    }
-
-    /// Retrieves a specific string property from the device.
-    ///
-    /// # Safety
-    /// This function is unsafe because it calls `retrieve_device_property` which interacts with raw pointers via FFI.
-    unsafe fn retrieve_string_property(
-        devinfo: SP_DEVINFO_DATA,
-        devinfoset: HDEVINFO,
-        property: &DEVPROPKEY,
-    ) -> Result<Rc<str>, DeviceStringPropertyError> {
-        let device_property = Device::retrieve_device_property(devinfo, devinfoset, property)?;
-        let device_property =
-            DeviceProperty::from((device_property.0.as_slice(), device_property.1));
-        let device_property = match device_property {
-            DeviceProperty::StringProperty { data } => Rc::from(data),
-            _ => return Err(DeviceStringPropertyError::PropertyNotString),
-        };
-        Ok(device_property)
-    }
-
+impl Device {
     /// Changes the state of the device (Enable/Disable).
     ///
     /// This function uses `SetupDiSetClassInstallParams` and `SetupDiCallClassInstaller` to modify the device state.
@@ -388,59 +450,29 @@ impl Device {
     ///
     /// * `new_state` - The target state (`Enable` or `Disable`).
     /// * `information_set` - The handle to the device information set.
-    fn change_state(
-        &self,
-        new_state: DeviceState,
-        information_set: HDEVINFO,
-    ) -> Result<(), Win32Error> {
-        let property_change: SP_PROPCHANGE_PARAMS = SP_PROPCHANGE_PARAMS {
-            ClassInstallHeader: SP_CLASSINSTALL_HEADER {
-                cbSize: std::mem::size_of::<SP_CLASSINSTALL_HEADER>() as u32,
-                InstallFunction: DIF_PROPERTYCHANGE,
-            },
-            StateChange: new_state as u32,
-            Scope: DICS_FLAG_GLOBAL,
-            HwProfile: 0,
+    fn change_state(&self, new_state: DeviceState) -> Result<(), Win32Error> {
+        let result = unsafe {
+            match new_state {
+                DeviceState::Enable => CM_Enable_DevNode(*self.devinst, 0),
+                DeviceState::Disable => CM_Disable_DevNode(*self.devinst, 0),
+            }
         };
 
-        let set_params_result = unsafe {
-            SetupDiSetClassInstallParamsW(
-                information_set,
-                &self.devinfo as *const SP_DEVINFO_DATA,
-                &property_change as *const SP_PROPCHANGE_PARAMS as *const SP_CLASSINSTALL_HEADER,
-                std::mem::size_of::<SP_PROPCHANGE_PARAMS>() as u32,
-            )
-        } == TRUE;
-
-        if !set_params_result {
-            return Err(unsafe { GetLastError().into() });
-        }
-
-        let call_result = unsafe {
-            SetupDiCallClassInstaller(
-                DIF_PROPERTYCHANGE,
-                information_set,
-                &self.devinfo as *const SP_DEVINFO_DATA,
-            )
-        } == TRUE;
-
-        if !call_result {
-            return Err(unsafe { GetLastError().into() });
+        if result != CR_SUCCESS {
+            return Err(ConfigManagerError::from(result).into());
         }
 
         Ok(())
     }
 }
 
-/// Manages a collection of devices and the underlying Windows Device Information Set.
+/// Manages a collection of devices using the Windows Configuration Manager API.
 ///
-/// This struct is the main entry point for querying and manipulating devices. It holds
-/// the `HDEVINFO` handle required for most SetupAPI calls.
+/// This struct is the main entry point for querying and manipulating devices. It uses
+/// DEVINST handles from the CM API to interact with devices without requiring HDEVINFO sets.
 pub struct DeviceTracker {
-    /// Handle to the device information set.
-    device_information_set: HDEVINFO,
     /// A map of root-level devices managed by this tracker.
-    pub devices: HashMap<Rc<str>, Device>,
+    pub devices: HashMap<DeviceId, Device>,
 }
 
 impl std::fmt::Display for DeviceTracker {
@@ -449,17 +481,6 @@ impl std::fmt::Display for DeviceTracker {
             writeln!(f, "{}", device)?;
         }
         Ok(())
-    }
-}
-
-impl Drop for DeviceTracker {
-    fn drop(&mut self) {
-        if self.device_information_set == INVALID_HANDLE_VALUE as HDEVINFO {
-            return;
-        }
-        unsafe {
-            let _ = SetupDiDestroyDeviceInfoList(self.device_information_set);
-        }
     }
 }
 
@@ -472,10 +493,14 @@ impl DeviceTracker {
     ///
     /// * `device_id` - The Instance ID of the device to modify.
     /// * `state` - The desired state.
-    pub fn set_device_state(&self, device_id: &str, state: DeviceState) -> Result<(), Win32Error> {
+    pub fn set_device_state(
+        &self,
+        device_id: &DeviceId,
+        state: DeviceState,
+    ) -> Result<(), Win32Error> {
         fn find_device_in_tree<'a>(
-            devices: &'a HashMap<Rc<str>, Device>,
-            target_id: &str,
+            devices: &'a HashMap<DeviceId, Device>,
+            target_id: &DeviceId,
         ) -> Option<&'a Device> {
             if let Some(device) = devices.get(target_id) {
                 return Some(device);
@@ -491,7 +516,7 @@ impl DeviceTracker {
         }
 
         if let Some(device) = find_device_in_tree(&self.devices, device_id) {
-            device.change_state(state, self.device_information_set)
+            device.change_state(state)
         } else {
             Err(Win32Error::from(ERROR_DEV_NOT_EXIST))
         }
@@ -506,26 +531,11 @@ impl DeviceTracker {
     ///
     /// * `device_id` - The Instance ID of the new device.
     pub fn insert_device_by_id(&mut self, device_id: &str) -> Result<(), DeviceInsertionError> {
-        let device_info =
-            Self::add_device_to_device_information_set(self.device_information_set, device_id)?;
-
-        let new_device = Device::from_bare_devinfo(device_info, self.device_information_set)?;
+        let device_instance = DeviceInstance::try_from(device_id)
+            .map_err(|err| DeviceInsertionError::from(Win32Error::from(err)))?;
+        let new_device = Device::try_from(device_instance)?;
 
         if device_filter_function(&new_device) {
-            let deletion_result = unsafe {
-                SetupDiDeleteDeviceInfo(
-                    self.device_information_set,
-                    &device_info as *const SP_DEVINFO_DATA,
-                )
-            } == TRUE;
-            if !deletion_result {
-                println!(
-                    "Warning: Could not delete filtered device {} after insertion failure. because of {}",
-                    device_id,
-                    Win32Error::from(unsafe { GetLastError() })
-                );
-            }
-
             return Err(DeviceInsertionError::DeviceFilteredNotUsb);
         }
 
@@ -544,8 +554,8 @@ impl DeviceTracker {
         if let Some(parent_id) = &new_device.parent_id {
             /// Helper to recursively find a parent in the existing tree
             fn find_parent_mut<'a>(
-                devices: &'a mut HashMap<Rc<str>, Device>,
-                target_parent_id: &str,
+                devices: &'a mut HashMap<DeviceId, Device>,
+                target_parent_id: &DeviceId,
             ) -> Option<&'a mut Device> {
                 if devices.contains_key(target_parent_id) {
                     return devices.get_mut(target_parent_id);
@@ -570,7 +580,7 @@ impl DeviceTracker {
 
         self.devices.insert(new_device_id.clone(), new_device);
 
-        let orphan_ids: Vec<Rc<str>> = self
+        let orphan_ids: Vec<DeviceId> = self
             .devices
             .iter()
             .filter(|(_, dev)| {
@@ -600,10 +610,10 @@ impl DeviceTracker {
     /// # Arguments
     ///
     /// * `device_id` - The Instance ID of the device to remove.
-    pub fn remove_device_by_id(&mut self, device_id: &str) -> Option<Win32Error> {
+    pub fn remove_device_by_id(&mut self, device_id: &DeviceId) -> Option<Device> {
         fn find_and_remove_device(
-            devices: &mut HashMap<Rc<str>, Device>,
-            device_id: &str,
+            devices: &mut HashMap<DeviceId, Device>,
+            device_id: &DeviceId,
         ) -> Option<Device> {
             if devices.contains_key(device_id) {
                 devices.remove(device_id)
@@ -617,22 +627,7 @@ impl DeviceTracker {
             }
         }
 
-        if let Some(d) = find_and_remove_device(&mut self.devices, device_id) {
-            let deletion_result = unsafe {
-                SetupDiDeleteDeviceInfo(
-                    self.device_information_set,
-                    &d.devinfo as *const SP_DEVINFO_DATA,
-                )
-            } == TRUE;
-
-            if !deletion_result {
-                Some(unsafe { GetLastError().into() })
-            } else {
-                None
-            }
-        } else {
-            None
-        }
+        find_and_remove_device(&mut self.devices, device_id)
     }
 }
 
@@ -669,8 +664,8 @@ impl DeviceTracker {
     }
 
     /// Enumerates all devices in a given `HDEVINFO` set.
-    fn get_listed_devices(devinfoset: HDEVINFO) -> Result<HashMap<Rc<str>, Device>, Win32Error> {
-        let mut devices: HashMap<Rc<str>, Device> = HashMap::new();
+    fn get_listed_devices(devinfoset: HDEVINFO) -> Result<HashMap<DeviceId, Device>, Win32Error> {
+        let mut devices: HashMap<DeviceId, Device> = HashMap::new();
         let mut index: u32 = 0;
 
         loop {
@@ -685,7 +680,9 @@ impl DeviceTracker {
                 ) == TRUE;
 
                 if operation_result {
-                    let next_device = Device::from_bare_devinfo(device_data, devinfoset)?;
+                    let device_instance = DeviceInstance::try_from(device_data.DevInst)
+                        .map_err(|err| Win32Error::from(err))?;
+                    let next_device = Device::try_from(device_instance)?;
 
                     if !device_filter_function(&next_device) {
                         devices.insert(next_device.device_id.clone(), next_device);
@@ -710,51 +707,16 @@ impl DeviceTracker {
 
     /// Merges multiple `HDEVINFO` sets into a single `DeviceTracker`.
     fn merge_device_information_sets(sets: &[HDEVINFO]) -> Result<Self, Win32Error> {
-        let merged_set = unsafe { SetupDiCreateDeviceInfoList(null(), null_mut()) };
         let mut merged_devices = HashMap::new();
 
         for set in sets.iter() {
             let devices = DeviceTracker::get_listed_devices(*set)?;
-            for device in DeviceIterator::from(&devices) {
-                Self::add_device_to_device_information_set(merged_set, &device.device_id)?;
-            }
             Self::merge_device_trees(&mut merged_devices, devices);
         }
 
         Ok(Self {
-            device_information_set: merged_set,
             devices: merged_devices,
         })
-    }
-
-    /// Adds a single device to an existing `HDEVINFO` set.
-    fn add_device_to_device_information_set(
-        device_information_set: HDEVINFO,
-        device_id: &str,
-    ) -> Result<SP_DEVINFO_DATA, Win32Error> {
-        let device_id_wide = device_id
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect::<Vec<u16>>();
-
-        let mut device_info: SP_DEVINFO_DATA = unsafe { std::mem::zeroed() };
-        device_info.cbSize = std::mem::size_of::<SP_DEVINFO_DATA>() as u32;
-
-        let insertion_result = unsafe {
-            SetupDiOpenDeviceInfoW(
-                device_information_set,
-                device_id_wide.as_ptr(),
-                null_mut(),
-                0,
-                &mut device_info as *mut SP_DEVINFO_DATA,
-            )
-        } == TRUE;
-
-        if !insertion_result {
-            Err(unsafe { Win32Error::from(GetLastError()) })
-        } else {
-            Ok(device_info)
-        }
     }
 
     /// Merges two device trees into one by finding the correct parent-child relationships.
@@ -767,14 +729,14 @@ impl DeviceTracker {
     /// * `base_tree` - The target tree that will receive all devices (will be modified in place)
     /// * `tree_to_merge` - The source tree whose devices will be merged into base_tree
     pub fn merge_device_trees(
-        base_tree: &mut HashMap<Rc<str>, Device>,
-        tree_to_merge: HashMap<Rc<str>, Device>,
+        base_tree: &mut HashMap<DeviceId, Device>,
+        tree_to_merge: HashMap<DeviceId, Device>,
     ) {
         // Collect all devices from tree_to_merge into a flat Vec
         // We need to do this because we can't iterate over tree_to_merge while moving devices out
         let mut devices_to_insert = Vec::new();
 
-        fn collect_devices(devices: HashMap<Rc<str>, Device>, collector: &mut Vec<Device>) {
+        fn collect_devices(devices: HashMap<DeviceId, Device>, collector: &mut Vec<Device>) {
             for (_, mut device) in devices {
                 let children = std::mem::take(&mut device.devices);
                 collector.push(device);
@@ -786,8 +748,8 @@ impl DeviceTracker {
 
         // Helper function to recursively find a device by ID in the tree
         fn find_device_mut<'a>(
-            devices: &'a mut HashMap<Rc<str>, Device>,
-            target_id: &str,
+            devices: &'a mut HashMap<DeviceId, Device>,
+            target_id: &DeviceId,
         ) -> Option<&'a mut Device> {
             if devices.contains_key(target_id) {
                 return devices.get_mut(target_id);
@@ -820,7 +782,7 @@ impl DeviceTracker {
             base_tree.insert(device_id, device);
 
             // Check if any existing root-level devices should be re-parented under this new device
-            let orphan_ids: Vec<Rc<str>> = base_tree
+            let orphan_ids: Vec<DeviceId> = base_tree
                 .iter()
                 .filter(|(id, dev)| {
                     **id != inserted_device_id
@@ -851,15 +813,15 @@ pub struct DeviceIterator<'a> {
 
 impl<'a> DeviceIterator<'a> {
     /// Creates a new iterator from a map of devices.
-    pub fn new(devices: &'a HashMap<Rc<str>, Device>) -> Self {
+    pub fn new(devices: &'a HashMap<DeviceId, Device>) -> Self {
         let stack = devices.values().collect();
 
         DeviceIterator { stack }
     }
 }
 
-impl<'a> From<&'a HashMap<Rc<str>, Device>> for DeviceIterator<'a> {
-    fn from(devices: &'a HashMap<Rc<str>, Device>) -> Self {
+impl<'a> From<&'a HashMap<DeviceId, Device>> for DeviceIterator<'a> {
+    fn from(devices: &'a HashMap<DeviceId, Device>) -> Self {
         Self::new(devices)
     }
 }
@@ -894,9 +856,9 @@ fn device_filter_function(device: &Device) -> bool {
 }
 
 /// Converts a flat map of devices into a hierarchical tree.
-fn convert_devices_into_tree(mut devices: HashMap<Rc<str>, Device>) -> HashMap<Rc<str>, Device> {
-    let device_ids: Vec<Rc<str>> = devices.keys().cloned().collect();
-    let parent_ids: Vec<(Rc<str>, Rc<str>)> = devices
+fn convert_devices_into_tree(mut devices: HashMap<DeviceId, Device>) -> HashMap<DeviceId, Device> {
+    let device_ids: Vec<DeviceId> = devices.keys().cloned().collect();
+    let parent_ids: Vec<(DeviceId, DeviceId)> = devices
         .values()
         .filter_map(|d| {
             if let Some(pid) = &d.parent_id {
@@ -916,11 +878,11 @@ fn convert_devices_into_tree(mut devices: HashMap<Rc<str>, Device>) -> HashMap<R
 
 /// Recursive helper to move a child device into its parent's `devices` map.
 fn place_child_in_parent(
-    parent_id: &Rc<str>,
-    child_id: &Rc<str>,
-    devices: &mut HashMap<Rc<str>, Device>,
-    device_ids: &Vec<Rc<str>>,
-    parent_ids: &Vec<(Rc<str>, Rc<str>)>,
+    parent_id: &DeviceId,
+    child_id: &DeviceId,
+    devices: &mut HashMap<DeviceId, Device>,
+    device_ids: &Vec<DeviceId>,
+    parent_ids: &Vec<(DeviceId, DeviceId)>,
     level: u32,
 ) -> () {
     if device_ids.contains(parent_id) {
@@ -951,7 +913,7 @@ fn place_child_in_parent(
 ///
 /// Input:  `\\?\USB#VID_046D&PID_C52B#5&2752457f&0&2#{a5dcbf10-6530-11d2-901f-00c04fb951ed}`
 /// Output: `USB\VID_046D&PID_C52B\5&2752457f&0&2`
-pub fn device_path_to_device_id(device_path: &str) -> Rc<str> {
+pub fn device_path_to_device_id(device_path: &str) -> DeviceId {
     // Remove \\?\ prefix
     let path = device_path.strip_prefix(r"\\?\").unwrap_or(device_path);
 
@@ -965,5 +927,5 @@ pub fn device_path_to_device_id(device_path: &str) -> Rc<str> {
     // Replace # with \
     let instance_id = path.replace('#', r"\");
 
-    instance_id.to_uppercase().into()
+    Rc::<str>::from(instance_id.to_uppercase()).into()
 }

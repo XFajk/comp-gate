@@ -10,6 +10,8 @@
 
 use std::{net::SocketAddr, ops::Deref, path::PathBuf, rc::Rc};
 
+use crate::helper::device_managment::DeviceId;
+
 /// Returns a per-user OS temporary directory path for the connection file.
 ///
 /// This uses `std::env::temp_dir()` which maps to:
@@ -32,9 +34,9 @@ pub enum IoApiCommand {
     /// Request a list of all connected devices.
     GetDeviceList = 2,
     /// Request to disable a specific device by its ID.
-    DisableDevice(Rc<str>) = 3,
+    DisableDevice(DeviceId) = 3,
     /// Request to enable a specific device by its ID.
-    EnableDevice(Rc<str>) = 4,
+    EnableDevice(DeviceId) = 4,
     /// Request the logs of device connection events.
     GetDeviceConnectionLogs = 5,
 }
@@ -74,9 +76,13 @@ impl TryFrom<&[&str]> for IoApiCommand {
     fn try_from(cmd_tokens: &[&str]) -> Result<Self, Self::Error> {
         match cmd_tokens[0] {
             "list" => Ok(IoApiCommand::GetDeviceList),
-            "logs" => Ok(IoApiCommand::DisableDevice(Rc::from(cmd_tokens[1]))),
-            "enable" => Ok(IoApiCommand::EnableDevice(Rc::from(cmd_tokens[1]))),
-            "disable" => Ok(IoApiCommand::GetDeviceConnectionLogs),
+            "disable" => Ok(IoApiCommand::DisableDevice(DeviceId::from(
+                Rc::<str>::from(cmd_tokens[1]),
+            ))),
+            "enable" => Ok(IoApiCommand::EnableDevice(DeviceId::from(Rc::<str>::from(
+                cmd_tokens[1],
+            )))),
+            "logs" => Ok(IoApiCommand::GetDeviceConnectionLogs),
             _ => Err(()),
         }
     }
@@ -89,8 +95,8 @@ impl TryFrom<(u8, Vec<Rc<str>>)> for IoApiCommand {
     fn try_from((code, args): (u8, Vec<Rc<str>>)) -> Result<Self, Self::Error> {
         match code {
             2 => Ok(IoApiCommand::GetDeviceList),
-            3 => Ok(IoApiCommand::DisableDevice(args[0].clone())),
-            4 => Ok(IoApiCommand::EnableDevice(args[0].clone())),
+            3 => Ok(IoApiCommand::DisableDevice(args[0].clone().into())),
+            4 => Ok(IoApiCommand::EnableDevice(args[0].clone().into())),
             5 => Ok(IoApiCommand::GetDeviceConnectionLogs),
             _ => Err(()),
         }
@@ -116,6 +122,13 @@ impl From<IoApiCommand> for IoApiRequest {
                 .chain(id.as_bytes().to_vec())
                 .collect(),
         };
+
+        let prefix_length: u32 = result_bytes.len() as u32;
+        let result_bytes: Vec<u8> = prefix_length
+            .to_be_bytes()
+            .into_iter()
+            .chain(result_bytes.into_iter())
+            .collect();
 
         Self(result_bytes.into())
     }

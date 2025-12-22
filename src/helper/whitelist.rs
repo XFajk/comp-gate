@@ -12,7 +12,7 @@
 use keyring::Entry;
 use std::{collections::HashSet, rc::Rc, str};
 
-use crate::helper::device_managment::DeviceTracker;
+use crate::helper::device_managment::{DeviceId, DeviceTracker};
 use anyhow::{Result, anyhow};
 
 /// Manages the authorized device list and enforces it on the system.
@@ -42,7 +42,7 @@ impl Whitelist {
         let entry = Entry::new("comp-gate.xfajk", "device_whitelist")?;
 
         // collect ids
-        let whitelist_entries: HashSet<Rc<str>> = device_tracker
+        let whitelist_entries: HashSet<DeviceId> = device_tracker
             .devices
             .iter()
             .map(|(id, _)| id.clone())
@@ -92,9 +92,11 @@ impl Whitelist {
     /// * `device_id` - The Instance ID of the device to authorize.
     pub fn whitelist_device(&mut self, device_id: &str) -> anyhow::Result<()> {
         let mut whitelist_entries = self.load_whitelist()?;
-        let rc_id = device_id.into();
 
-        whitelist_entries.insert(rc_id);
+        let rc_id: Rc<str> = Rc::from(device_id);
+        let id = DeviceId::from(rc_id);
+
+        whitelist_entries.insert(id);
 
         self.store_whitelist(&whitelist_entries)?;
 
@@ -110,9 +112,10 @@ impl Whitelist {
     /// * `device_id` - The Instance ID of the device to de-authorize.
     pub fn blacklist_device(&mut self, device_id: &str) -> anyhow::Result<()> {
         let mut whitelist_entries = self.load_whitelist()?;
-        let rc_id: Rc<str> = device_id.into();
+        let rc_id: Rc<str> = Rc::from(device_id);
+        let id = DeviceId::from(rc_id);
 
-        whitelist_entries.remove(&rc_id);
+        whitelist_entries.remove(&id);
 
         self.store_whitelist(&whitelist_entries)?;
 
@@ -125,7 +128,7 @@ impl Whitelist {
     ///
     /// * `Ok(HashSet<Rc<str>>)` - The set of authorized device IDs.
     /// * `Err(anyhow::Error)` - If the keyring cannot be accessed or data is corrupt.
-    pub fn load_whitelist(&self) -> Result<HashSet<Rc<str>>> {
+    pub fn load_whitelist(&self) -> Result<HashSet<DeviceId>> {
         let hex = match self.entry.get_password() {
             Ok(s) => s,
             Err(e) => return Err(anyhow!("failed to read whitelist from keyring: {}", e)),
@@ -141,7 +144,7 @@ impl Whitelist {
     /// # Arguments
     ///
     /// * `set` - The set of device IDs to store.
-    pub fn store_whitelist(&self, set: &HashSet<Rc<str>>) -> Result<()> {
+    pub fn store_whitelist(&self, set: &HashSet<DeviceId>) -> Result<()> {
         let bytes = serialize_set_bytes(set);
         let hex = encode_hex(&bytes);
         self.entry
@@ -152,7 +155,7 @@ impl Whitelist {
 }
 
 // helper: serialize as [u64 len LE][bytes][u64 len][bytes]...
-fn serialize_set_bytes(set: &HashSet<Rc<str>>) -> Vec<u8> {
+fn serialize_set_bytes(set: &HashSet<DeviceId>) -> Vec<u8> {
     let mut out = Vec::new();
     for s in set {
         let b = s.as_bytes();
@@ -163,7 +166,7 @@ fn serialize_set_bytes(set: &HashSet<Rc<str>>) -> Vec<u8> {
     out
 }
 
-fn deserialize_set_bytes(bytes: &[u8]) -> Result<HashSet<Rc<str>>> {
+fn deserialize_set_bytes(bytes: &[u8]) -> Result<HashSet<DeviceId>> {
     let mut out = HashSet::new();
     let mut i = 0usize;
     while i < bytes.len() {
@@ -185,7 +188,8 @@ fn deserialize_set_bytes(bytes: &[u8]) -> Result<HashSet<Rc<str>>> {
         let s = str::from_utf8(slice)
             .map_err(|e| anyhow!("corrupt whitelist data: invalid UTF-8: {}", e))?;
         let rc = Rc::<str>::from(s.to_owned().into_boxed_str());
-        out.insert(rc);
+        let id = DeviceId::from(rc);
+        out.insert(id);
         i += len;
     }
     Ok(out)

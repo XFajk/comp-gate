@@ -62,6 +62,8 @@ fn main() -> anyhow::Result<()> {
                 }
             };
 
+        println!("{:?}", &*request);
+
         ioapi_stream
             .write_all(&request)
             .expect("Failed to write request");

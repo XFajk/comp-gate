@@ -140,7 +140,10 @@ impl DeviceInstance {
                 0,
             )
         };
-        if call_result != CR_SUCCESS {
+
+        // CR_BUFFER_SMALL (26) is expected here - it means the property exists but we need a buffer
+        const CR_BUFFER_SMALL: u32 = 26;
+        if call_result != CR_SUCCESS && call_result != CR_BUFFER_SMALL {
             return Err(ConfigManagerError::from(call_result).into());
         }
 
@@ -180,7 +183,7 @@ impl DeviceInstance {
     }
 
     fn is_device_instance_valid(&self) -> bool {
-        let mut status = 0;
+        let mut status = 0u32;
         let mut problem_number = 0u32;
 
         let call_result = unsafe {
@@ -191,7 +194,7 @@ impl DeviceInstance {
                 0,
             )
         };
-        call_result == CR_SUCCESS && status & DN_HAS_PROBLEM == 0
+        call_result == CR_SUCCESS
     }
 }
 
@@ -712,6 +715,14 @@ impl DeviceTracker {
         for set in sets.iter() {
             let devices = DeviceTracker::get_listed_devices(*set)?;
             Self::merge_device_trees(&mut merged_devices, devices);
+
+            // free the device information set
+            if *set == INVALID_HANDLE_VALUE as isize {
+                continue;
+            }
+            unsafe {
+                let _ = SetupDiDestroyDeviceInfoList(*set);
+            }
         }
 
         Ok(Self {

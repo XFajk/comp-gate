@@ -147,7 +147,7 @@ pub enum ConfigManagerError {
     #[error("Config manager success")]
     Success,
 
-    #[error("Config manager instance device instance")]
+    #[error("Config manager invalid device instance")]
     InvalidDeviceInstance,
 
     /// Config manager error (ERROR_CONFIG_MANAGER_ERROR).

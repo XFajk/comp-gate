@@ -591,6 +591,7 @@ impl DeviceTracker {
 
                 parent.devices.insert(child.device_id.clone(), child);
             } else {
+                // If parent not found, insert the new device as a top device
                 self.devices.insert(new_device_id.clone(), new_device);
             }
         }
@@ -606,7 +607,7 @@ impl DeviceTracker {
 
         for orphan_id in orphan_ids {
             if let Some(mut orphan) = self.devices.remove(&orphan_id) {
-                if let Some(new_parent) = self.devices.get_mut(&new_device_id) {
+                if let Some(new_parent) = self.find_device_mut(&new_device_id) {
                     println!(
                         "- Re-parenting orphan device {} under {}",
                         orphan_id, new_device_id

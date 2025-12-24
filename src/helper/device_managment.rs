@@ -488,6 +488,48 @@ impl std::fmt::Display for DeviceTracker {
 }
 
 impl DeviceTracker {
+    /// Recursively find a device by ID (immutable) within the provided devices map.
+    fn find_in_tree<'a>(
+        devices: &'a HashMap<DeviceId, Device>,
+        target_id: &DeviceId,
+    ) -> Option<&'a Device> {
+        if let Some(device) = devices.get(target_id) {
+            return Some(device);
+        }
+        for device in devices.values() {
+            if let Some(found) = Self::find_in_tree(&device.devices, target_id) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Recursively find a device by ID (mutable) within the provided devices map.
+    fn find_in_tree_mut<'a>(
+        devices: &'a mut HashMap<DeviceId, Device>,
+        target_id: &DeviceId,
+    ) -> Option<&'a mut Device> {
+        if devices.contains_key(target_id) {
+            return devices.get_mut(target_id);
+        }
+        for device in devices.values_mut() {
+            if let Some(found) = Self::find_in_tree_mut(&mut device.devices, target_id) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Find a device by ID (immutable) within this tracker's device tree.
+    pub fn find_device<'a>(&'a self, target_id: &DeviceId) -> Option<&'a Device> {
+        Self::find_in_tree(&self.devices, target_id)
+    }
+
+    /// Find a device by ID (mutable) within this tracker's device tree.
+    pub fn find_device_mut<'a>(&'a mut self, target_id: &DeviceId) -> Option<&'a mut Device> {
+        Self::find_in_tree_mut(&mut self.devices, target_id)
+    }
+
     /// Sets the state (Enable/Disable) of a specific device by its ID.
     ///
     /// This function searches the entire device tree for the specified ID.
@@ -501,24 +543,7 @@ impl DeviceTracker {
         device_id: &DeviceId,
         state: DeviceState,
     ) -> Result<(), Win32Error> {
-        fn find_device_in_tree<'a>(
-            devices: &'a HashMap<DeviceId, Device>,
-            target_id: &DeviceId,
-        ) -> Option<&'a Device> {
-            if let Some(device) = devices.get(target_id) {
-                return Some(device);
-            }
-
-            for device in devices.values() {
-                if let Some(found) = find_device_in_tree(&device.devices, target_id) {
-                    return Some(found);
-                }
-            }
-
-            None
-        }
-
-        if let Some(device) = find_device_in_tree(&self.devices, device_id) {
+        if let Some(device) = self.find_device(device_id) {
             device.change_state(state)
         } else {
             Err(Win32Error::from(ERROR_DEV_NOT_EXIST))
@@ -555,23 +580,7 @@ impl DeviceTracker {
         let new_device_id = new_device.device_id.clone();
 
         if let Some(parent_id) = &new_device.parent_id {
-            /// Helper to recursively find a parent in the existing tree
-            fn find_parent_mut<'a>(
-                devices: &'a mut HashMap<DeviceId, Device>,
-                target_parent_id: &DeviceId,
-            ) -> Option<&'a mut Device> {
-                if devices.contains_key(target_parent_id) {
-                    return devices.get_mut(target_parent_id);
-                }
-                for dev in devices.values_mut() {
-                    if let Some(found) = find_parent_mut(&mut dev.devices, target_parent_id) {
-                        return Some(found);
-                    }
-                }
-                None
-            }
-
-            if let Some(parent) = find_parent_mut(&mut self.devices, parent_id) {
+            if let Some(parent) = Self::find_in_tree_mut(&mut self.devices, parent_id) {
                 // Update tree level based on parent
                 let mut child = new_device;
                 child.tree_level = parent.tree_level + 1;
@@ -757,21 +766,7 @@ impl DeviceTracker {
 
         collect_devices(tree_to_merge, &mut devices_to_insert);
 
-        // Helper function to recursively find a device by ID in the tree
-        fn find_device_mut<'a>(
-            devices: &'a mut HashMap<DeviceId, Device>,
-            target_id: &DeviceId,
-        ) -> Option<&'a mut Device> {
-            if devices.contains_key(target_id) {
-                return devices.get_mut(target_id);
-            }
-            for dev in devices.values_mut() {
-                if let Some(found) = find_device_mut(&mut dev.devices, target_id) {
-                    return Some(found);
-                }
-            }
-            None
-        }
+        // Using DeviceTracker::find_in_tree_mut to find parent devices in the tree
 
         // Insert each device into the correct location in base_tree
         for mut device in devices_to_insert {
@@ -779,7 +774,7 @@ impl DeviceTracker {
 
             // Try to find the parent in the base tree
             if let Some(parent_id) = &device.parent_id {
-                if let Some(parent) = find_device_mut(base_tree, parent_id) {
+                if let Some(parent) = Self::find_in_tree_mut(base_tree, parent_id) {
                     // Found the parent, insert as a child
                     device.tree_level = parent.tree_level + 1;
                     parent.devices.insert(device_id, device);

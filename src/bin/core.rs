@@ -28,7 +28,10 @@ use std::{
 
 use anyhow::Result;
 
-use comp_gate::{helper::ioapi::connection_file_path, *};
+use comp_gate::{
+    helper::{device_managment::DeviceId, ioapi::connection_file_path},
+    *,
+};
 use error::PollEventError;
 use helper::{
     device_managment::{DeviceTracker, device_path_to_device_id},
@@ -92,8 +95,6 @@ fn main() -> Result<()> {
                     let message_length = u32::from_be_bytes(length_buf) as usize;
                     println!("recving a packet of size {}", message_length);
 
-                    handle_ioapi_message(message_length);
-
                     let cmd = parse_cmd_message(connection, message_length);
                     let cmd = if cmd.is_some() {
                         println!("Command parsed successfully: {:?}", cmd);
@@ -103,68 +104,12 @@ fn main() -> Result<()> {
                         continue;
                     };
 
-                    match cmd {
-                        IoApiCommand::GetDeviceList => {
-                            let payload = convert_bytes_to_payload(
-                                whitelist.device_tracker.to_string().as_bytes(),
-                            );
-
-                            connection.write_all(&payload).unwrap_or_else(|err| {
-                                println!("Error writing to IO API connection: {}", err);
-                            });
-                        }
-                        IoApiCommand::GetDeviceConnectionLogs => {
-                            let mut core_payload = vec![0u8; 1024];
-                            for log in device_connection_logs.iter() {
-                                core_payload.extend_from_slice(&log.as_bytes());
-                                core_payload.push(b'\n');
-                            }
-
-                            connection
-                                .write_all(&convert_bytes_to_payload(&core_payload))
-                                .unwrap_or_else(|err| {
-                                    println!("Error writing to IO API connection: {}", err);
-                                });
-                        }
-                        IoApiCommand::EnableDevice(device_id) => {
-                            println!("Enabling device: {}", device_id);
-                            let payload = if let Err(e) = whitelist.device_tracker.set_device_state(
-                                &device_id,
-                                helper::device_managment::DeviceState::Enable,
-                            ) {
-                                convert_bytes_to_payload(
-                                    format!("Enabling device failed: {}", e).as_bytes(),
-                                )
-                            } else {
-                                convert_bytes_to_payload(b"Device enabled.")
-                            };
-
-                            connection
-                                .write_all(&convert_bytes_to_payload(&payload))
-                                .unwrap_or_else(|err| {
-                                    println!("Error writing to IO API connection: {}", err);
-                                });
-                        }
-                        IoApiCommand::DisableDevice(device_id) => {
-                            println!("Disabling device: {}", device_id);
-                            let payload = if let Err(e) = whitelist.device_tracker.set_device_state(
-                                &device_id,
-                                helper::device_managment::DeviceState::Disable,
-                            ) {
-                                convert_bytes_to_payload(
-                                    format!("Disabling device failed: {}", e).as_bytes(),
-                                )
-                            } else {
-                                convert_bytes_to_payload(b"Device disabled.")
-                            };
-
-                            connection
-                                .write_all(&convert_bytes_to_payload(&payload))
-                                .unwrap_or_else(|err| {
-                                    println!("Error writing to IO API connection: {}", err);
-                                });
-                        }
-                    }
+                    handle_ioapi_command(
+                        cmd,
+                        &whitelist.device_tracker,
+                        connection,
+                        &mut device_connection_logs,
+                    );
                 }
                 Err(e) if e.kind() != std::io::ErrorKind::WouldBlock => {
                     closed_connections.push(index);
@@ -180,44 +125,11 @@ fn main() -> Result<()> {
 
         // Device Tracking logic
         match callback_handle.poll_events() {
-            Ok(event) => match event {
-                UsbConnectionEvent::Connected(device_path) => {
-                    let device_id = device_path_to_device_id(&device_path);
-
-                    let log = format!("USB Device connected: {}", device_id);
-                    println!("{}", log);
-                    device_connection_logs.push(log.into_boxed_str());
-
-                    match whitelist.device_tracker.insert_device_by_id(&device_id) {
-                        Ok(_) => {
-                            println!("- Device inserted into tracker");
-                            println!(
-                                "- Current device tracker state:\n{}",
-                                whitelist.device_tracker
-                            );
-                        }
-                        Err(e) => println!("- Error inserting device into tracker: {}", e),
-                    }
-                }
-                UsbConnectionEvent::Disconnected(device_path) => {
-                    let device_id = device_path_to_device_id(&device_path);
-
-                    let log = format!("USB Device disconnected: {}", device_id);
-                    println!("{}", log);
-                    device_connection_logs.push(log.into_boxed_str());
-
-                    match whitelist.device_tracker.remove_device_by_id(&device_id) {
-                        None => {
-                            println!("- Device removed from tracker");
-                            println!(
-                                "- Current device tracker state:\n{}",
-                                whitelist.device_tracker
-                            );
-                        }
-                        Some(e) => println!("- Error removing device from tracker: {}", e),
-                    }
-                }
-            },
+            Ok(event) => handle_connection_event(
+                event,
+                &mut whitelist.device_tracker,
+                &mut device_connection_logs,
+            ),
             Err(e) => match e {
                 PollEventError::ThreadFinished => {
                     println!("USB connection callback thread has finished");
@@ -296,19 +208,15 @@ fn convert_bytes_to_payload(bytes: &[u8]) -> Box<[u8]> {
     [&length_prefix, bytes].concat().into_boxed_slice()
 }
 
-fn handle_ioapi_message(connection: &mut TcpStream, message_length: usize) {
-    let cmd = parse_cmd_message(connection, message_length);
-    let cmd = if cmd.is_some() {
-        println!("Command parsed successfully: {:?}", cmd);
-        cmd.unwrap()
-    } else {
-        println!("Error parsing command message");
-        continue;
-    };
-
+fn handle_ioapi_command(
+    cmd: IoApiCommand,
+    device_tracker: &DeviceTracker,
+    connection: &mut TcpStream,
+    device_connection_logs: &Vec<Box<str>>,
+) {
     match cmd {
         IoApiCommand::GetDeviceList => {
-            let payload = convert_bytes_to_payload(whitelist.device_tracker.to_string().as_bytes());
+            let payload = convert_bytes_to_payload(device_tracker.to_string().as_bytes());
 
             connection.write_all(&payload).unwrap_or_else(|err| {
                 println!("Error writing to IO API connection: {}", err);
@@ -329,8 +237,7 @@ fn handle_ioapi_message(connection: &mut TcpStream, message_length: usize) {
         }
         IoApiCommand::EnableDevice(device_id) => {
             println!("Enabling device: {}", device_id);
-            let payload = if let Err(e) = whitelist
-                .device_tracker
+            let payload = if let Err(e) = device_tracker
                 .set_device_state(&device_id, helper::device_managment::DeviceState::Enable)
             {
                 convert_bytes_to_payload(format!("Enabling device failed: {}", e).as_bytes())
@@ -346,8 +253,7 @@ fn handle_ioapi_message(connection: &mut TcpStream, message_length: usize) {
         }
         IoApiCommand::DisableDevice(device_id) => {
             println!("Disabling device: {}", device_id);
-            let payload = if let Err(e) = whitelist
-                .device_tracker
+            let payload = if let Err(e) = device_tracker
                 .set_device_state(&device_id, helper::device_managment::DeviceState::Disable)
             {
                 convert_bytes_to_payload(format!("Disabling device failed: {}", e).as_bytes())
@@ -361,5 +267,130 @@ fn handle_ioapi_message(connection: &mut TcpStream, message_length: usize) {
                     println!("Error writing to IO API connection: {}", err);
                 });
         }
+    }
+}
+
+fn handle_connection_event(
+    event: UsbConnectionEvent,
+    device_tracker: &mut DeviceTracker,
+    device_connection_logs: &mut Vec<Box<str>>,
+) {
+    match event {
+        UsbConnectionEvent::Connected(device_path) => {
+            let device_id = device_path_to_device_id(&device_path);
+
+            let log = format!("USB Device connected: {}", device_id);
+            println!("{}", log);
+            device_connection_logs.push(log.into_boxed_str());
+
+            match device_tracker.insert_device_by_id(&device_id) {
+                Ok(_) => {
+                    println!("- Device inserted into tracker");
+                    println!("- Current device tracker state:\n{}", device_tracker);
+                    if device_id.starts_with("HID") {
+                        handle_hid_device_insertion(
+                            &device_id,
+                            device_tracker,
+                            device_connection_logs,
+                        );
+                    }
+                }
+                Err(e) => println!("- Error inserting device into tracker: {}", e),
+            }
+        }
+        UsbConnectionEvent::Disconnected(device_path) => {
+            let device_id = device_path_to_device_id(&device_path);
+
+            let log = format!("USB Device disconnected: {}", device_id);
+            println!("{}", log);
+            device_connection_logs.push(log.into_boxed_str());
+
+            match device_tracker.remove_device_by_id(&device_id) {
+                None => {
+                    println!("- Device removed from tracker");
+                    println!("- Current device tracker state:\n{}", device_tracker);
+                    if device_id.starts_with("HID") {
+                        handle_hid_device_removal(
+                            &device_id,
+                            device_tracker,
+                            device_connection_logs,
+                        );
+                    }
+                }
+                Some(device) => println!("- Error removing device {} from tracker.", device),
+            }
+        }
+    }
+}
+
+fn handle_hid_device_insertion(
+    hid_device_id: &DeviceId,
+    device_tracker: &mut DeviceTracker,
+    device_connection_logs: &mut Vec<Box<str>>,
+) {
+    let hid_device = device_tracker.find_device(hid_device_id);
+    if hid_device.is_none() {
+        return;
+    }
+    let hid_device = hid_device.unwrap();
+    let parent_device_id = hid_device.parent_id.clone();
+    if parent_device_id.is_none() {
+        return;
+    }
+    let parent_device_id = parent_device_id.unwrap();
+
+    let log = format!("USB Device connected: {}", parent_device_id);
+    println!("{}", log);
+    device_connection_logs.push(log.into_boxed_str());
+
+    match device_tracker.insert_device_by_id(&parent_device_id) {
+        Ok(_) => {
+            println!("- Device inserted into tracker");
+            println!("- Current device tracker state:\n{}", device_tracker);
+            if parent_device_id.starts_with("HID") {
+                handle_hid_device_insertion(
+                    &parent_device_id,
+                    device_tracker,
+                    device_connection_logs,
+                );
+            }
+        }
+        Err(e) => println!("- Error inserting device into tracker: {}", e),
+    }
+}
+
+fn handle_hid_device_removal(
+    hid_device_id: &DeviceId,
+    device_tracker: &mut DeviceTracker,
+    device_connection_logs: &mut Vec<Box<str>>,
+) {
+    let hid_device = device_tracker.find_device(hid_device_id);
+    if hid_device.is_none() {
+        return;
+    }
+    let hid_device = hid_device.unwrap();
+    let parent_device_id = hid_device.parent_id.clone();
+    if parent_device_id.is_none() {
+        return;
+    }
+    let parent_device_id = parent_device_id.unwrap();
+
+    let log = format!("USB Device disconnected: {}", parent_device_id);
+    println!("{}", log);
+    device_connection_logs.push(log.into_boxed_str());
+
+    match device_tracker.remove_device_by_id(&parent_device_id) {
+        None => {
+            println!("- Device removed from tracker");
+            println!("- Current device tracker state:\n{}", device_tracker);
+            if parent_device_id.starts_with("HID") {
+                handle_hid_device_removal(
+                    &parent_device_id,
+                    device_tracker,
+                    device_connection_logs,
+                );
+            }
+        }
+        Some(device) => println!("- Error removing device {} from tracker", device),
     }
 }

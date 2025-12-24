@@ -586,11 +586,10 @@ impl DeviceTracker {
                 child.tree_level = parent.tree_level + 1;
 
                 parent.devices.insert(child.device_id.clone(), child);
-                return;
+            } else {
+                self.devices.insert(new_device_id.clone(), new_device);
             }
         }
-
-        self.devices.insert(new_device_id.clone(), new_device);
 
         let orphan_ids: Vec<DeviceId> = self
             .devices

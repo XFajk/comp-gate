@@ -579,6 +579,10 @@ impl DeviceTracker {
     fn insert_deivice_into_tree(&mut self, new_device: Device) {
         let new_device_id = new_device.device_id.clone();
 
+        if let Some(_) = self.find_device(&new_device_id) {
+            return;
+        }
+
         if let Some(parent_id) = &new_device.parent_id {
             if let Some(parent) = Self::find_in_tree_mut(&mut self.devices, parent_id) {
                 // Update tree level based on parent

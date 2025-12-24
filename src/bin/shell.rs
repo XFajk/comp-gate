@@ -49,6 +49,8 @@ fn main() -> anyhow::Result<()> {
         let cmd_input = cmd_buffer.trim();
         if cmd_input.is_empty() {
             continue;
+        } else if cmd_input.starts_with("exit") || cmd_input.starts_with("quit") {
+            break;
         }
 
         let request: IoApiRequest =
@@ -61,8 +63,6 @@ fn main() -> anyhow::Result<()> {
                     continue;
                 }
             };
-
-        println!("{:?}", &*request);
 
         ioapi_stream
             .write_all(&request)
@@ -87,4 +87,6 @@ fn main() -> anyhow::Result<()> {
             Err(_) => println!("{:?}", body),
         }
     }
+
+    Ok(())
 }

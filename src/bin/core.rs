@@ -92,6 +92,8 @@ fn main() -> Result<()> {
                     let message_length = u32::from_be_bytes(length_buf) as usize;
                     println!("recving a packet of size {}", message_length);
 
+                    handle_ioapi_message(message_length);
+
                     let cmd = parse_cmd_message(connection, message_length);
                     let cmd = if cmd.is_some() {
                         println!("Command parsed successfully: {:?}", cmd);
@@ -179,8 +181,8 @@ fn main() -> Result<()> {
         // Device Tracking logic
         match callback_handle.poll_events() {
             Ok(event) => match event {
-                UsbConnectionEvent::Connected(device_name) => {
-                    let device_id = device_path_to_device_id(&device_name);
+                UsbConnectionEvent::Connected(device_path) => {
+                    let device_id = device_path_to_device_id(&device_path);
 
                     let log = format!("USB Device connected: {}", device_id);
                     println!("{}", log);
@@ -197,8 +199,8 @@ fn main() -> Result<()> {
                         Err(e) => println!("- Error inserting device into tracker: {}", e),
                     }
                 }
-                UsbConnectionEvent::Disconnected(device_name) => {
-                    let device_id = device_path_to_device_id(&device_name);
+                UsbConnectionEvent::Disconnected(device_path) => {
+                    let device_id = device_path_to_device_id(&device_path);
 
                     let log = format!("USB Device disconnected: {}", device_id);
                     println!("{}", log);
@@ -292,4 +294,72 @@ fn parse_cmd_message(connection: &mut TcpStream, message_length: usize) -> Optio
 fn convert_bytes_to_payload(bytes: &[u8]) -> Box<[u8]> {
     let length_prefix = (bytes.len() as u32).to_be_bytes();
     [&length_prefix, bytes].concat().into_boxed_slice()
+}
+
+fn handle_ioapi_message(connection: &mut TcpStream, message_length: usize) {
+    let cmd = parse_cmd_message(connection, message_length);
+    let cmd = if cmd.is_some() {
+        println!("Command parsed successfully: {:?}", cmd);
+        cmd.unwrap()
+    } else {
+        println!("Error parsing command message");
+        continue;
+    };
+
+    match cmd {
+        IoApiCommand::GetDeviceList => {
+            let payload = convert_bytes_to_payload(whitelist.device_tracker.to_string().as_bytes());
+
+            connection.write_all(&payload).unwrap_or_else(|err| {
+                println!("Error writing to IO API connection: {}", err);
+            });
+        }
+        IoApiCommand::GetDeviceConnectionLogs => {
+            let mut core_payload = vec![0u8; 1024];
+            for log in device_connection_logs.iter() {
+                core_payload.extend_from_slice(&log.as_bytes());
+                core_payload.push(b'\n');
+            }
+
+            connection
+                .write_all(&convert_bytes_to_payload(&core_payload))
+                .unwrap_or_else(|err| {
+                    println!("Error writing to IO API connection: {}", err);
+                });
+        }
+        IoApiCommand::EnableDevice(device_id) => {
+            println!("Enabling device: {}", device_id);
+            let payload = if let Err(e) = whitelist
+                .device_tracker
+                .set_device_state(&device_id, helper::device_managment::DeviceState::Enable)
+            {
+                convert_bytes_to_payload(format!("Enabling device failed: {}", e).as_bytes())
+            } else {
+                convert_bytes_to_payload(b"Device enabled.")
+            };
+
+            connection
+                .write_all(&convert_bytes_to_payload(&payload))
+                .unwrap_or_else(|err| {
+                    println!("Error writing to IO API connection: {}", err);
+                });
+        }
+        IoApiCommand::DisableDevice(device_id) => {
+            println!("Disabling device: {}", device_id);
+            let payload = if let Err(e) = whitelist
+                .device_tracker
+                .set_device_state(&device_id, helper::device_managment::DeviceState::Disable)
+            {
+                convert_bytes_to_payload(format!("Disabling device failed: {}", e).as_bytes())
+            } else {
+                convert_bytes_to_payload(b"Device disabled.")
+            };
+
+            connection
+                .write_all(&convert_bytes_to_payload(&payload))
+                .unwrap_or_else(|err| {
+                    println!("Error writing to IO API connection: {}", err);
+                });
+        }
+    }
 }
